@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cwctype>
 #include <exception>
 #include <filesystem>
@@ -18,6 +20,9 @@ namespace {
 
 constexpr wchar_t kParentWindowClassName[] = L"visdriver.avs.parent";
 constexpr wchar_t kChildWindowClassName[] = L"visdriver.avs.child";
+constexpr int kWaveformSamples = 576;
+
+int g_total_pcm_samples = 0;
 
 std::wstring ConvertToWide(const std::string &text) {
   if (text.empty()) {
@@ -89,6 +94,44 @@ bool RegisterWindowClass(const wchar_t *class_name) {
   std::wcerr << L"ERROR: Failed to register window class '" << class_name
              << L"': " << FormatWindowsErrorMessage(error) << L"\n";
   return false;
+}
+
+uint8_t SampleToWaveformValue(int16_t sample) {
+  const float scaled =
+      (static_cast<float>(sample) / 32768.0f) * 127.0f + 128.0f;
+  const float clamped = std::clamp(scaled, 0.0f, 255.0f);
+  return static_cast<uint8_t>(clamped);
+}
+
+void fill_waveform(winampVisModule *mod, const int16_t *pcm, int start_sample,
+                   int hop) {
+  if (mod == nullptr) {
+    return;
+  }
+
+  if (pcm == nullptr || g_total_pcm_samples <= 0 || hop <= 0) {
+    for (int channel = 0; channel < 2; ++channel) {
+      std::fill_n(mod->waveformData[channel], kWaveformSamples, 128);
+    }
+    return;
+  }
+
+  const int last_valid_sample = g_total_pcm_samples - 1;
+
+  for (int channel = 0; channel < 2; ++channel) {
+    for (int i = 0; i < kWaveformSamples; ++i) {
+      int sample_index = start_sample + i * hop;
+      if (sample_index > last_valid_sample) {
+        sample_index = last_valid_sample;
+      }
+      if (sample_index < 0) {
+        sample_index = 0;
+      }
+
+      const int16_t sample = pcm[sample_index * 2 + channel];
+      mod->waveformData[channel][i] = SampleToWaveformValue(sample);
+    }
+  }
 }
 
 HWND CreateHiddenParentWindow(int width, int height) {
@@ -357,6 +400,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     const size_t total_samples = audio_pcm.size() / 2;
     std::wcout << L"WAV ok: 44100 Hz, 2 ch, " << total_samples << L" samples\n";
+    g_total_pcm_samples = static_cast<int>(total_samples);
   } catch (const std::exception &ex) {
     std::wcerr << L"ERROR: Failed to load WAV: "
                << ConvertToWide(std::string(ex.what())) << L"\n";
@@ -409,10 +453,19 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 #endif
 
   for (int frame = 0; frame < options.frames; ++frame) {
+    const int fps_value = (options.fps > 0) ? options.fps : 1;
+    const int samples_per_frame = static_cast<int>(std::lround(44100.0 / fps_value));
+    const int hop = std::max(1, samples_per_frame / kWaveformSamples);
+    const int start_sample = frame * samples_per_frame;
+
+    fill_waveform(host.mod, audio_pcm.data(), start_sample, hop);
+
     for (int channel = 0; channel < 2; ++channel) {
-      std::fill_n(host.mod->waveformData[channel], 576, 128);
       std::fill_n(host.mod->spectrumData[channel], 576, 0);
     }
+
+    std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
+               << L": start=" << start_sample << L", hop=" << hop << L"\n";
 
     const int render_result = host.mod->Render(host.mod);
     if (render_result != 0) {
