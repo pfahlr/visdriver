@@ -109,6 +109,7 @@ Codex must work incrementally. Each PR implements **one phase** only.
 ## Acceptance checklist (Codex must verify after each PR)
 
 * Builds on Windows (MSVC).
+* Builds on Linux (MINGW).
 * Subcommand compiles and runs with `--help`.
 * Produces logs/errors instead of crashing.
 * Deterministic outputs (PNG/Hash) identical on repeat runs.
