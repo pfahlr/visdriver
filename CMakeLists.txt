@@ -39,10 +39,15 @@ add_executable(visdriver
         src/output_plugin.c
         src/vis_plugin.c
         src/visualization.c
+        tools/generate_verification_data.cpp
         src/thirdparty/argparse/argparse.c
         src/thirdparty/kissfft/kiss_fft.c
         src/thirdparty/kissfft/kiss_fftr.c
         )
+
+set_target_properties(visdriver PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON)
 
 if (MSVC)
     target_compile_definitions(visdriver PRIVATE _CRT_SECURE_NO_WARNINGS)
