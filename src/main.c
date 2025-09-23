@@ -17,8 +17,15 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #if !defined(_MSC_VER)
 #include <unistd.h> // usleep
+#endif
+#if defined(_WIN32)
+#include <windows.h>
+#include <shellapi.h>
+#include <wchar.h>
+int cmd_generate_verification_data(int argc, wchar_t **argv);
 #endif
 
 #include <winamp/wa_ipc.h>
@@ -107,6 +114,29 @@ void self_identify() {
 }
 
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+  if (argc >= 2 && strcmp(argv[1], "generate-verification-data") == 0) {
+    int wide_argc = 0;
+    wchar_t **wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+    if (wide_argv == NULL) {
+      fprintf(stderr, "ERROR: Failed to parse command line.\n");
+      return 1;
+    }
+
+    int dispatch_argc = wide_argc;
+    wchar_t **dispatch_argv = wide_argv;
+    if (wide_argc >= 2) {
+      dispatch_argc = wide_argc - 1;
+      dispatch_argv = wide_argv + 1;
+    }
+
+    int exit_code =
+        cmd_generate_verification_data(dispatch_argc, dispatch_argv);
+
+    LocalFree(wide_argv);
+    return exit_code;
+  }
+#endif
   visdriver_config_t config = {NULL};
   parse_command_line(&config, argc, argv); // may exit
 
