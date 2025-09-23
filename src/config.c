@@ -118,7 +118,7 @@ void parse_command_line(visdriver_config_t *config, int argc, char **argv) {
   argparse_describe(&argparse, description, epilog);
 
   // `argv` values originate from the C runtime and remain immutable here.
-  const char *const *const argv_ro = (const char *const *)argv;
+  const char **const argv_ro = (const char **)argv;
   argc = argparse_parse(&argparse, argc, argv_ro);
 
   // Check for required arguments
@@ -134,6 +134,7 @@ void parse_command_line(visdriver_config_t *config, int argc, char **argv) {
       "line://"; // for in_line.dll or in_linein.dll
   const char *const *const default_tracks = &default_track;
 
-  config->tracks = (argc >= 1) ? argv_ro : default_tracks;
+  const char *const *const argv_ro_const = (const char *const *const)argv_ro;
+  config->tracks = (argc >= 1) ? argv_ro_const : default_tracks;
   config->track_count = (argc >= 1) ? argc : 1;
 }
