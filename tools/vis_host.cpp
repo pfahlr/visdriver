@@ -101,3 +101,49 @@ void unload_vis(VisHost &host) {
     host.dll = nullptr;
   }
 }
+
+bool begin_vis(VisHost &host, int width, int height) {
+  if (host.mod == nullptr) {
+    std::wcerr << L"ERROR: Visualization module handle is null.\n";
+    return false;
+  }
+
+  HWND const target_window = (host.child != nullptr) ? host.child : host.parent;
+  host.mod->hwndParent = target_window;
+  host.mod->hDllInstance = host.dll;
+  host.mod->sRate = 44100;
+  host.mod->nCh = 2;
+  host.mod->latencyMs = 0;
+  host.mod->spectrumNch = 2;
+  host.mod->waveformNch = 2;
+
+  if (target_window != nullptr) {
+    SetWindowPos(target_window, nullptr, 0, 0, width, height,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE);
+  }
+
+  if (host.mod->Init == nullptr) {
+    std::wcerr << L"ERROR: Visualization module is missing Init().\n";
+    return false;
+  }
+
+  const int init_result = host.mod->Init(host.mod);
+  if (init_result != 0) {
+    std::wcerr << L"ERROR: Visualization module Init() returned "
+               << init_result << L".\n";
+    return false;
+  }
+
+  return true;
+}
+
+void end_vis(VisHost &host) {
+  if (host.mod != nullptr && host.mod->Quit != nullptr) {
+    host.mod->Quit(host.mod);
+  }
+
+  if (host.child != nullptr) {
+    DestroyWindow(host.child);
+    host.child = nullptr;
+  }
+}

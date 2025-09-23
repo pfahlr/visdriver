@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include <xmmintrin.h>
+
 #include <windows.h>
 
 #include "vis_host.hpp"
@@ -386,16 +388,39 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
 
-  host.mod->hwndParent = host.child;
-  host.mod->hDllInstance = host.dll;
-  host.mod->sRate = 44100;
-  host.mod->nCh = 2;
-  host.mod->latencyMs = 0;
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
-  host.mod->spectrumNch = 2;
-  host.mod->waveformNch = 2;
+  if (!begin_vis(host, options.width, options.height)) {
+    unload_vis(host);
+    return 1;
+  }
+
+  if (host.mod->Render == nullptr) {
+    std::wcerr << L"ERROR: Visualization module is missing Render().\n";
+    end_vis(host);
+    unload_vis(host);
+    return 1;
+  }
 
   std::wcout << L"loaded vis module\n";
+
+#if defined(_MM_SET_FLUSH_ZERO_MODE) && defined(_MM_SET_DENORMALS_ZERO_MODE)
+  _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+  _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
+
+  for (int frame = 0; frame < options.frames; ++frame) {
+    for (int channel = 0; channel < 2; ++channel) {
+      std::fill_n(host.mod->waveformData[channel], 576, 128);
+      std::fill_n(host.mod->spectrumData[channel], 576, 0);
+    }
+
+    const int render_result = host.mod->Render(host.mod);
+    if (render_result != 0) {
+      break;
+    }
+  }
+
+  end_vis(host);
 
   unload_vis(host);
 
