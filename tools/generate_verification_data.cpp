@@ -10,11 +10,29 @@
 #include <windows.h>
 
 #include "vis_host.hpp"
+#include "wav_reader.hpp"
 
 namespace {
 
 constexpr wchar_t kParentWindowClassName[] = L"visdriver.avs.parent";
 constexpr wchar_t kChildWindowClassName[] = L"visdriver.avs.child";
+
+std::wstring ConvertToWide(const std::string &text) {
+  if (text.empty()) {
+    return std::wstring();
+  }
+  const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                           text.c_str(), -1, nullptr, 0);
+  if (required <= 0) {
+    return L"(conversion error)";
+  }
+  std::wstring result(static_cast<size_t>(required - 1), L'\0');
+  if (!result.empty()) {
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), -1,
+                        result.data(), required);
+  }
+  return result;
+}
 
 std::wstring FormatWindowsErrorMessage(DWORD error_code) {
   wchar_t *buffer = nullptr;
@@ -321,6 +339,27 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   PrintSummary(options);
+
+  std::vector<int16_t> audio_pcm;
+  try {
+    WavData wav = load_wav_16le_stereo(options.wav);
+    if (wav.channels != 2) {
+      throw std::runtime_error("WAV file must have 2 channels");
+    }
+
+    if (wav.sample_rate != 44100) {
+      audio_pcm = resample_linear_2ch_16bit(wav.pcm, wav.sample_rate, 44100);
+    } else {
+      audio_pcm = wav.pcm;
+    }
+
+    const size_t total_samples = audio_pcm.size() / 2;
+    std::wcout << L"WAV ok: 44100 Hz, 2 ch, " << total_samples << L" samples\n";
+  } catch (const std::exception &ex) {
+    std::wcerr << L"ERROR: Failed to load WAV: "
+               << ConvertToWide(std::string(ex.what())) << L"\n";
+    return 1;
+  }
 
   if (!SetCurrentDirectoryW(options.runtime_dir.c_str())) {
     const DWORD error = GetLastError();
