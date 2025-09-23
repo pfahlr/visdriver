@@ -1,18 +1,23 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cwchar>
 #include <cwctype>
 #include <exception>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <vector>
+#include <system_error>
 
 #include <xmmintrin.h>
 
 #include <windows.h>
 
+#include "capture.hpp"
 #include "spectrum.hpp"
 #include "vis_host.hpp"
 #include "wav_reader.hpp"
@@ -66,6 +71,58 @@ std::wstring FormatWindowsErrorMessage(DWORD error_code) {
     LocalFree(buffer);
   }
   return message;
+}
+
+bool EnsureDirectoryExists(const std::wstring &path) {
+  if (path.empty()) {
+    std::wcerr << L"ERROR: Directory path is empty.\n";
+    return false;
+  }
+
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  if (attributes != INVALID_FILE_ATTRIBUTES) {
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      return true;
+    }
+    std::wcerr << L"ERROR: Path '" << path
+               << L"' exists but is not a directory.\n";
+    return false;
+  }
+
+  const DWORD error = GetLastError();
+  if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+    std::wcerr << L"ERROR: GetFileAttributesW failed for '" << path
+               << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    return false;
+  }
+
+  const std::filesystem::path dir_path(path);
+  const std::filesystem::path parent = dir_path.parent_path();
+  if (!parent.empty() && parent != dir_path) {
+    if (!EnsureDirectoryExists(parent.wstring())) {
+      return false;
+    }
+  }
+
+  if (CreateDirectoryW(path.c_str(), nullptr)) {
+    return true;
+  }
+
+  const DWORD create_error = GetLastError();
+  if (create_error == ERROR_ALREADY_EXISTS) {
+    return true;
+  }
+
+  std::wcerr << L"ERROR: Failed to create directory '" << path
+             << L"': " << FormatWindowsErrorMessage(create_error) << L"\n";
+  return false;
+}
+
+std::wstring FormatFrameFilename(int frame_index) {
+  std::wstringstream stream;
+  stream << L"frame" << std::setw(4) << std::setfill(L'0') << frame_index
+         << L".png";
+  return stream.str();
 }
 
 LRESULT CALLBACK DummyWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -379,6 +436,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
 
+  if (options.png_step <= 0) {
+    std::wcerr << L"ERROR: --png-step must be greater than zero.\n";
+    return 1;
+  }
+
   if (options.runtime_dir.empty()) {
     const std::filesystem::path vis_path(options.vis_dll);
     const std::filesystem::path parent = vis_path.parent_path();
@@ -386,6 +448,24 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   PrintSummary(options);
+
+  std::error_code path_error;
+  const std::filesystem::path out_dir_path =
+      std::filesystem::absolute(options.out_dir, path_error);
+  if (path_error) {
+    std::wcerr << L"ERROR: Failed to resolve output directory '" << options.out_dir
+               << L"': "
+               << ConvertToWide(path_error.message()) << L"\n";
+    return 1;
+  }
+  const std::filesystem::path frames_dir_path = out_dir_path / L"frames";
+
+  if (!EnsureDirectoryExists(out_dir_path.wstring())) {
+    return 1;
+  }
+  if (!EnsureDirectoryExists(frames_dir_path.wstring())) {
+    return 1;
+  }
 
   std::vector<int16_t> audio_pcm;
   try {
@@ -458,6 +538,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
                                       0);
   bool logged_spectrum_ok = false;
 
+  std::vector<uint8_t> frame_rgba;
+  bool capture_failed = false;
+
   for (int frame = 0; frame < options.frames; ++frame) {
     const int fps_value = (options.fps > 0) ? options.fps : 1;
     const int samples_per_frame = static_cast<int>(std::lround(44100.0 / fps_value));
@@ -494,11 +577,33 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     if (render_result != 0) {
       break;
     }
+
+    if (!capture_child_to_rgba(host.child, options.width, options.height,
+                               frame_rgba)) {
+      std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
+      capture_failed = true;
+      break;
+    }
+
+    if ((frame % options.png_step) == 0) {
+      const std::filesystem::path png_path =
+          frames_dir_path / FormatFrameFilename(frame);
+      if (!write_png(png_path.wstring(), options.width, options.height,
+                     frame_rgba.data())) {
+        capture_failed = true;
+        break;
+      }
+      std::wcout << L"Wrote " << png_path << L"\n";
+    }
   }
 
   end_vis(host);
 
   unload_vis(host);
+
+  if (capture_failed) {
+    return 1;
+  }
 
   return 0;
 }
