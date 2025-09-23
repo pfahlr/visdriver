@@ -41,6 +41,7 @@ add_executable(visdriver
         src/visualization.c
         tools/capture.cpp
         tools/generate_verification_data.cpp
+        tools/sha256.cpp
         tools/spectrum.cpp
         tools/wav_reader.cpp
         tools/vis_host.cpp
