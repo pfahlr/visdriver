@@ -39,8 +39,10 @@ add_executable(visdriver
         src/output_plugin.c
         src/vis_plugin.c
         src/visualization.c
+        tools/avi_writer.cpp
         tools/capture.cpp
         tools/generate_verification_data.cpp
+        tools/manifest.cpp
         tools/sha256.cpp
         tools/spectrum.cpp
         tools/wav_reader.cpp
@@ -73,3 +75,11 @@ if (IS_DIRECTORY "${CMAKE_SOURCE_DIR}/.git")
     string(STRIP "${PROJECT_GIT_SHA1}" PROJECT_GIT_SHA1)
 endif()
 target_compile_definitions(visdriver PRIVATE PROJECT_VERSION="${PROJECT_VERSION}" PROJECT_GIT_SHA1="${PROJECT_GIT_SHA1}")
+
+if (MSVC)
+    set(VFW32_LIB Vfw32)
+else ()
+    set(VFW32_LIB vfw32)
+endif ()
+
+target_link_libraries(visdriver PRIVATE ${VFW32_LIB})
