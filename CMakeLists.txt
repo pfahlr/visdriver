@@ -40,11 +40,12 @@ add_executable(visdriver
         src/vis_plugin.c
         src/visualization.c
         tools/generate_verification_data.cpp
+        tools/spectrum.cpp
         tools/wav_reader.cpp
         tools/vis_host.cpp
         src/thirdparty/argparse/argparse.c
-        src/thirdparty/kissfft/kiss_fft.c
-        src/thirdparty/kissfft/kiss_fftr.c
+        third_party/kissfft/kiss_fft.c
+        third_party/kissfft/kiss_fftr.c
         )
 
 set_target_properties(visdriver PROPERTIES
@@ -59,7 +60,10 @@ endif ()
 # https://learn.microsoft.com/en-us/cpp/porting/modifying-winver-and-win32-winnt?view=msvc-170
 target_compile_definitions(visdriver PRIVATE WINVER=0x0600 _WIN32_WINNT=0x0600)
 
-target_include_directories(visdriver PRIVATE "${CMAKE_SOURCE_DIR}/src/thirdparty")
+target_include_directories(visdriver PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/thirdparty"
+        "${CMAKE_SOURCE_DIR}/third_party"
+        )
 
 # Pass version and Git SHA1 if available
 if (IS_DIRECTORY "${CMAKE_SOURCE_DIR}/.git")
