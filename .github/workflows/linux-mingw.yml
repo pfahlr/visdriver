@@ -46,6 +46,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial"
+          # Make sure we own it before apt touches it (helps on first run)
+          chmod -R u+rwX "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
+
+      - name: Prepare APT cache dir
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial"
 
       - name: Install build dependencies
         run: |
@@ -58,8 +65,20 @@ jobs:
           else
             echo "No packages listed in .ci/ubuntu-packages.txt"
           fi
-          
-      # (optional) Cache CMake downloads too
+
+      # Reclaim permissions so the cache action can read/save the directory
+      - name: Sanitize APT cache for saving
+        if: always()
+        run: |
+          set -euo pipefail
+          # Remove apt lockfiles; they're useless in the cache and can be root-owned
+          rm -f "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/lock" || true
+          rm -f "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial/lock" || true
+          # Ensure the runner owns everything so actions/cache can tar it
+          sudo chown -R "$USER":"$USER" "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
+          chmod -R u+rwX "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
+          # (optional) Cache CMake downloads too
+
       - name: Cache CMake downloads
         uses: actions/cache@v4
         with:
