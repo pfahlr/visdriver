@@ -13,6 +13,7 @@
 
 #include <windows.h>
 
+#include "spectrum.hpp"
 #include "vis_host.hpp"
 #include "wav_reader.hpp"
 
@@ -21,6 +22,7 @@ namespace {
 constexpr wchar_t kParentWindowClassName[] = L"visdriver.avs.parent";
 constexpr wchar_t kChildWindowClassName[] = L"visdriver.avs.child";
 constexpr int kWaveformSamples = 576;
+constexpr int kSpectrumFftSize = 1024;
 
 int g_total_pcm_samples = 0;
 
@@ -452,6 +454,10 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
 #endif
 
+  std::vector<int16_t> spectrum_window(static_cast<size_t>(kSpectrumFftSize) * 2,
+                                      0);
+  bool logged_spectrum_ok = false;
+
   for (int frame = 0; frame < options.frames; ++frame) {
     const int fps_value = (options.fps > 0) ? options.fps : 1;
     const int samples_per_frame = static_cast<int>(std::lround(44100.0 / fps_value));
@@ -460,8 +466,25 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     fill_waveform(host.mod, audio_pcm.data(), start_sample, hop);
 
-    for (int channel = 0; channel < 2; ++channel) {
-      std::fill_n(host.mod->spectrumData[channel], 576, 0);
+    std::fill(spectrum_window.begin(), spectrum_window.end(), 0);
+    const int total_samples = g_total_pcm_samples;
+    if (!audio_pcm.empty() && start_sample < total_samples) {
+      const int available = total_samples - start_sample;
+      const int samples_to_copy =
+          std::min(kSpectrumFftSize, std::max(0, available));
+      if (samples_to_copy > 0) {
+        const int16_t *src =
+            audio_pcm.data() + static_cast<size_t>(start_sample) * 2;
+        std::copy_n(src, static_cast<size_t>(samples_to_copy) * 2,
+                    spectrum_window.begin());
+      }
+    }
+
+    fill_spectrum(host.mod, spectrum_window.data(), 0, kSpectrumFftSize);
+
+    if (!logged_spectrum_ok) {
+      std::wcout << L"spectrum ok\n";
+      logged_spectrum_ok = true;
     }
 
     std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
