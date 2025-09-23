@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cwchar>
@@ -7,11 +8,14 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 #include <sstream>
 #include <string>
-#include <vector>
 #include <system_error>
+#include <type_traits>
+#include <vector>
 
 #include <xmmintrin.h>
 
@@ -19,6 +23,7 @@
 
 #include "capture.hpp"
 #include "spectrum.hpp"
+#include "sha256.hpp"
 #include "vis_host.hpp"
 #include "wav_reader.hpp"
 
@@ -30,6 +35,43 @@ constexpr int kWaveformSamples = 576;
 constexpr int kSpectrumFftSize = 1024;
 
 int g_total_pcm_samples = 0;
+
+struct HandleCloser {
+  void operator()(HANDLE handle) const {
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle);
+    }
+  }
+};
+
+using ScopedHandle =
+    std::unique_ptr<std::remove_pointer<HANDLE>::type, HandleCloser>;
+
+bool WriteAllBytes(HANDLE handle, const std::string &text) {
+  if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+  if (text.empty()) {
+    return true;
+  }
+
+  const char *data = text.data();
+  size_t remaining = text.size();
+  while (remaining > 0) {
+    const DWORD chunk = static_cast<DWORD>(
+        std::min<size_t>(remaining, std::numeric_limits<DWORD>::max()));
+    DWORD written = 0;
+    if (!WriteFile(handle, data, chunk, &written, nullptr)) {
+      return false;
+    }
+    if (written == 0) {
+      return false;
+    }
+    data += written;
+    remaining -= written;
+  }
+  return true;
+}
 
 std::wstring ConvertToWide(const std::string &text) {
   if (text.empty()) {
@@ -459,11 +501,31 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
   const std::filesystem::path frames_dir_path = out_dir_path / L"frames";
+  const std::filesystem::path hashes_dir_path = out_dir_path / L"hashes";
 
   if (!EnsureDirectoryExists(out_dir_path.wstring())) {
     return 1;
   }
   if (!EnsureDirectoryExists(frames_dir_path.wstring())) {
+    return 1;
+  }
+  if (!EnsureDirectoryExists(hashes_dir_path.wstring())) {
+    return 1;
+  }
+
+  const std::filesystem::path per_frame_csv_path =
+      hashes_dir_path / L"per_frame.csv";
+  const std::filesystem::path rolling_hash_path =
+      hashes_dir_path / L"rolling_sha256.txt";
+
+  ScopedHandle per_frame_file(CreateFileW(
+      per_frame_csv_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (!per_frame_file || per_frame_file.get() == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    std::wcerr << L"ERROR: Failed to open per-frame hash file '"
+               << per_frame_csv_path.wstring() << L"': "
+               << FormatWindowsErrorMessage(error) << L"\n";
     return 1;
   }
 
@@ -540,6 +602,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
   std::vector<uint8_t> frame_rgba;
   bool capture_failed = false;
+  bool hash_failed = false;
+  Sha256 rolling_hash;
 
   for (int frame = 0; frame < options.frames; ++frame) {
     const int fps_value = (options.fps > 0) ? options.fps : 1;
@@ -585,6 +649,17 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       break;
     }
 
+    const std::array<uint8_t, 32> frame_digest = Sha256Hash(frame_rgba);
+    const std::string frame_hex = Sha256ToHex(frame_digest);
+    const std::string csv_line = std::to_string(frame) + "," + frame_hex + "\n";
+    if (!WriteAllBytes(per_frame_file.get(), csv_line)) {
+      std::wcerr << L"ERROR: Failed to write per-frame hash for frame " << frame
+                 << L".\n";
+      hash_failed = true;
+      break;
+    }
+    rolling_hash.Update(frame_rgba);
+
     if ((frame % options.png_step) == 0) {
       const std::filesystem::path png_path =
           frames_dir_path / FormatFrameFilename(frame);
@@ -597,11 +672,47 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
   }
 
+  if (!capture_failed && !hash_failed) {
+    if (!FlushFileBuffers(per_frame_file.get())) {
+      const DWORD error = GetLastError();
+      std::wcerr << L"ERROR: Failed to flush per-frame hash file: "
+                 << FormatWindowsErrorMessage(error) << L"\n";
+      hash_failed = true;
+    }
+  }
+
   end_vis(host);
 
   unload_vis(host);
 
-  if (capture_failed) {
+  if (!capture_failed && !hash_failed) {
+    const std::array<uint8_t, 32> rolling_digest = rolling_hash.Final();
+    const std::string rolling_hex = Sha256ToHex(rolling_digest);
+    const std::string rolling_line = rolling_hex + "\n";
+
+    ScopedHandle rolling_file(CreateFileW(
+        rolling_hash_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!rolling_file || rolling_file.get() == INVALID_HANDLE_VALUE) {
+      const DWORD error = GetLastError();
+      std::wcerr << L"ERROR: Failed to open rolling hash file '"
+                 << rolling_hash_path.wstring() << L"': "
+                 << FormatWindowsErrorMessage(error) << L"\n";
+      hash_failed = true;
+    } else {
+      if (!WriteAllBytes(rolling_file.get(), rolling_line)) {
+        std::wcerr << L"ERROR: Failed to write rolling hash.\n";
+        hash_failed = true;
+      } else if (!FlushFileBuffers(rolling_file.get())) {
+        const DWORD error = GetLastError();
+        std::wcerr << L"ERROR: Failed to flush rolling hash file: "
+                   << FormatWindowsErrorMessage(error) << L"\n";
+        hash_failed = true;
+      }
+    }
+  }
+
+  if (capture_failed || hash_failed) {
     return 1;
   }
 
