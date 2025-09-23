@@ -38,7 +38,7 @@ bool AviWriter::Open(const std::wstring &path, int width, int height, int fps) {
     return false;
   }
 
-  AVISTREAMINFO info;
+  AVISTREAMINFOW info;
   std::memset(&info, 0, sizeof(info));
   info.fccType = streamtypeVIDEO;
   info.dwScale = 1;
