@@ -17,7 +17,6 @@
 
 name: Build on Windows
 
-# Drop permissions to minimum, for security
 permissions:
   contents: read
 
@@ -33,35 +32,65 @@ jobs:
     defaults:
       run:
         shell: bash
+
     steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
 
-    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      # Set up MSVC env for 32-bit (Win32) toolchain so Ninja uses the right cl.exe
+      - name: MSVC Dev Cmd (x86)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
 
-    - name: Configure
-      run: |-
-        cmake \
-          -G "Visual Studio 17 2022" \
-          -A Win32 \
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-          -S . \
-          -B build
+      # Ninja is a great match for compiler launchers like sccache
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
 
-    - name: Make
-      run: |-
-        cmake --build build/
+      # Restore a cache for CMake's downloads/registry on Windows
+      - name: Cache CMake downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/cmake
+            $LOCALAPPDATA/CMake
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt', 'cmake/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
 
-    - name: Prepare build artifacts for upload
-      run: |-
-        mkdir "visdriver_win32bin_msvc_${{ github.sha }}"
-        cp -v \
-          COPYING \
-          README.md \
-          build/Debug/visdriver.exe \
-          "visdriver_win32bin_msvc_${{ github.sha }}"/
+      # Use sccache on Windows (ccache-like) to speed up recompiles
+      - name: Setup sccache
+        uses: hendrikmuhs/ccache-action@v1.2.19
+        with:
+          variant: sccache
+          key: ${{ runner.os }}-msvc-x86-${{ hashFiles('CMakeLists.txt', 'cmake/**/*.cmake', 'src/**') }}
+          max-size: 2G
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-      with:
-        name: "visdriver_win32bin_msvc_${{ github.sha }}"
-        path: "visdriver_win32bin_msvc_${{ github.sha }}/"
-        if-no-files-found: error
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=cl \
+            -DCMAKE_CXX_COMPILER=cl \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: |
+          cmake --build build -- -v
+
+      - name: Prepare build artifacts for upload
+        run: |
+          set -x
+          mkdir "visdriver_win32bin_msvc_${{ github.sha }}"
+          cp -v \
+            COPYING \
+            README.md \
+            build/visdriver.exe \
+            "visdriver_win32bin_msvc_${{ github.sha }}"/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: "visdriver_win32bin_msvc_${{ github.sha }}"
+          path: "visdriver_win32bin_msvc_${{ github.sha }}/"
+          if-no-files-found: error

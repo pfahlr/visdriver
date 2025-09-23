@@ -17,7 +17,6 @@
 
 name: Build on Linux
 
-# Drop permissions to minimum, for security
 permissions:
   contents: read
 
@@ -30,46 +29,79 @@ jobs:
   linux-mingw:
     name: Build on Linux
     runs-on: ubuntu-24.04
+
+    env:
+      # Where we store deb archives to avoid re-downloading on every run
+      APT_CACHE_DIR: ${{ runner.temp }}/apt-cache
+
     steps:
+      - uses: actions/checkout@v4
 
-    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Restore APT archive cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: ${{ runner.os }}-${{ runner.image }}-apt-archives-${{ hashFiles('.ci/ubuntu-packages.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.image }}-apt-archives-
+            ${{ runner.os }}-apt-archives-
 
-    - name: Install build dependencies
-      run: |-
-        set -x
-        sudo apt-get update
-        sudo apt-get install --yes --no-install-recommends -V \
-            build-essential \
-            cmake \
-            mingw-w64
+      - name: Install build dependencies
+        run: |
+          set -x
+          sudo apt-get update
+          # Point apt's archive cache to the restored dir
+          sudo apt-get -o dir::cache::archives="${APT_CACHE_DIR}" \
+            install --yes --no-install-recommends -V \
+            $(grep -vE '^\s*#' .ci/ubuntu-packages.txt | xargs)
 
-    - name: Configure
-      run: |-
-        cmake \
-          -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake \
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-          -S . \
-          -B build
+      # (optional) Cache CMake downloads too
+      - name: Cache CMake downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cmake
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt', 'cmake/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
 
-    - name: Make
-      run: |-
-        make -C build -j$(nproc) VERBOSE=1
+      # Set up and cache ccache (works for i686-w64-mingw32-* compilers too)
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2.19
+        with:
+          # Key on OS, toolchain file (compiler choice), and build graph
+          key: ${{ runner.os }}-mingw-${{ hashFiles('cmake/mingw-toolchain.cmake', 'CMakeLists.txt', 'cmake/**/*.cmake') }}
+          max-size: 750M
 
-    - name: Prepare build artifacts for upload
-      run: |-
-        mkdir "visdriver_win32bin_mingw_${{ github.sha }}"
-        cp -v \
-          COPYING \
-          README.md \
-          /usr/i686-w64-mingw32/lib/libwinpthread-1.dll \
-          /usr/lib/gcc/i686-w64-mingw32/*-posix/libgcc_s_dw2-1.dll \
-          /usr/lib/gcc/i686-w64-mingw32/*-posix/libstdc++-6.dll \
-          build/visdriver.exe \
-          "visdriver_win32bin_mingw_${{ github.sha }}"/
+      - name: Configure
+        run: |
+          cmake \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -S . \
+            -B build
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-      with:
-        name: "visdriver_win32bin_mingw_${{ github.sha }}"
-        path: "visdriver_win32bin_mingw_${{ github.sha }}/"
-        if-no-files-found: error
+      - name: Make
+        run: |
+          make -C build -j"$(nproc)" VERBOSE=1
+
+      - name: Prepare build artifacts for upload
+        run: |
+          set -x
+          mkdir "visdriver_win32bin_mingw_${{ github.sha }}"
+          cp -v \
+            COPYING \
+            README.md \
+            /usr/i686-w64-mingw32/lib/libwinpthread-1.dll \
+            /usr/lib/gcc/i686-w64-mingw32/*-posix/libgcc_s_dw2-1.dll \
+            /usr/lib/gcc/i686-w64-mingw32/*-posix/libstdc++-6.dll \
+            build/visdriver.exe \
+            "visdriver_win32bin_mingw_${{ github.sha }}"/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: "visdriver_win32bin_mingw_${{ github.sha }}"
+          path: "visdriver_win32bin_mingw_${{ github.sha }}/"
+          if-no-files-found: error

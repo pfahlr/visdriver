@@ -17,7 +17,6 @@
 
 name: Enforce clang-format
 
-# Drop permissions to minimum, for security
 permissions:
   contents: read
 
@@ -32,27 +31,97 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CLANG_MAJOR_VERSION: 19
+      APT_CACHE_DIR: ${{ runner.temp }}/apt-cache
     steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
 
-    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      # Cache APT archives; key includes image + desired clang major
+      - name: Restore APT archive cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: ${{ runner.os }}-${{ runner.image }}-apt-archives-clang${{ env.CLANG_MAJOR_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.image }}-apt-archives-
+            ${{ runner.os }}-apt-archives-
 
-    - name: Add Clang/LLVM repositories
-      run: |-
-        set -x
-        source /etc/os-release
-        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-        sudo add-apt-repository "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-${CLANG_MAJOR_VERSION} main"
+      # Modern LLVM repo setup (no apt-key)
+      - name: Add LLVM APT repo (signed-by)
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-${CLANG_MAJOR_VERSION} main" | \
+            sudo tee /etc/apt/sources.list.d/llvm-toolchain-${UBUNTU_CODENAME}-${CLANG_MAJOR_VERSION}.list
 
-    - name: Install clang-format
-      run: |-
-        set -x
-        sudo apt-get update
-        sudo apt-get install --yes --no-install-recommends -V \
+      - name: Install clang-format
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get -o dir::cache::archives="${APT_CACHE_DIR}" install -y --no-install-recommends -V \
             clang-format-${CLANG_MAJOR_VERSION}
 
-    - name: Enforce clang-format
-      run: |-
-        set -x
-        clang-format-${CLANG_MAJOR_VERSION} --version
-        clang-format-${CLANG_MAJOR_VERSION} -i src/*.{c,h}
-        git diff --exit-code  # i.e. reject non-empty diff
+      # Build a file list: changed files on PRs; otherwise all tracked C/C++ sources
+      - name: Determine files to check
+        id: files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.sha }}"
+            files=$(git diff --name-only --diff-filter=ACMR "$base_sha" "$head_sha" | grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' || true)
+          else
+            files=$(git ls-files | grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' || true)
+          fi
+          # Fallback: empty list means nothing to check
+          echo "list<<EOF" >> $GITHUB_OUTPUT
+          echo "${files}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Show file list
+        if: ${{ steps.files.outputs.list != '' }}
+        run: |
+          echo "Files to check:"
+          printf '%s\n' "${{ steps.files.outputs.list }}"
+
+      # Enforce format without mutating workspace
+      - name: Check clang-format
+        id: cf
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ steps.files.outputs.list }}" ]]; then
+            echo "No C/C++ files to check."
+            exit 0
+          fi
+          # Use style from .clang-format if present
+          clang-format-${CLANG_MAJOR_VERSION} --version
+          # --dry-run + --Werror causes nonzero exit when formatting differs
+          # We also print a unified diff to help devs see what changed.
+          # Note: --ferror-limit=0 prints all errors (newer clang-format).
+          set +e
+          diff_output=$(clang-format-${CLANG_MAJOR_VERSION} --dry-run --Werror ${{ steps.files.outputs.list }} 2>&1)
+          status=$?
+          set -e
+          if [[ $status -ne 0 ]]; then
+            # Produce a patch artifact users can apply: run format to generate a diff
+            git -c core.safecrlf=false config user.email "ci@example.invalid"
+            git -c core.safecrlf=false config user.name  "ci"
+            cp -a . repo-before-format
+            clang-format-${CLANG_MAJOR_VERSION} -i ${{ steps.files.outputs.list }}
+            git diff > clang-format.patch || true
+            echo "::group::clang-format output"
+            echo "$diff_output"
+            echo "::endgroup::"
+            echo "Formatting differences detected."
+            exit 2
+          fi
+
+      # If the check failed, upload the patch so it’s easy to apply locally
+      - name: Upload clang-format patch
+        if: failure() && steps.cf.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: clang-format.patch
+          path: clang-format.patch
+          if-no-files-found: ignore
