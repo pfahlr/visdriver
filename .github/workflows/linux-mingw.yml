@@ -42,14 +42,23 @@ jobs:
             ${{ runner.os }}-${{ runner.image }}-apt-archives-
             ${{ runner.os }}-apt-archives-
 
+      - name: Prepare APT cache dir
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial"
+
       - name: Install build dependencies
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get -o dir::cache::archives="${GITHUB_WORKSPACE}/${APT_CACHE_DIR}" \
-            install --yes --no-install-recommends -V \
-            $(grep -vE '^\s*#' .ci/ubuntu-packages.txt | xargs)
-
+          packages="$(grep -vE '^\s*(#|$)' .ci/ubuntu-packages.txt || true)"
+          if [[ -n "${packages}" ]]; then
+            sudo apt-get -o dir::cache::archives="${GITHUB_WORKSPACE}/${APT_CACHE_DIR}" \
+              install --yes --no-install-recommends -V ${packages}
+          else
+            echo "No packages listed in .ci/ubuntu-packages.txt"
+          fi
+          
       # (optional) Cache CMake downloads too
       - name: Cache CMake downloads
         uses: actions/cache@v4
