@@ -21,7 +21,9 @@
 
 #include <windows.h>
 
+#include "avi_writer.hpp"
 #include "capture.hpp"
+#include "manifest.hpp"
 #include "spectrum.hpp"
 #include "sha256.hpp"
 #include "vis_host.hpp"
@@ -530,6 +532,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   std::vector<int16_t> audio_pcm;
+  int wav_sample_rate = 0;
+  int wav_channels = 0;
+  int64_t wav_sample_count = 0;
   try {
     WavData wav = load_wav_16le_stereo(options.wav);
     if (wav.channels != 2) {
@@ -545,6 +550,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     const size_t total_samples = audio_pcm.size() / 2;
     std::wcout << L"WAV ok: 44100 Hz, 2 ch, " << total_samples << L" samples\n";
     g_total_pcm_samples = static_cast<int>(total_samples);
+    wav_sample_rate = 44100;
+    wav_channels = 2;
+    wav_sample_count = static_cast<int64_t>(total_samples);
   } catch (const std::exception &ex) {
     std::wcerr << L"ERROR: Failed to load WAV: "
                << ConvertToWide(std::string(ex.what())) << L"\n";
@@ -601,13 +609,31 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   bool logged_spectrum_ok = false;
 
   std::vector<uint8_t> frame_rgba;
+  std::vector<std::filesystem::path> png_outputs;
   bool capture_failed = false;
   bool hash_failed = false;
+  bool avi_failed = false;
+  const int effective_fps = (options.fps > 0) ? options.fps : 1;
+  AviWriter avi_writer;
+  const bool avi_enabled = !options.avi_out.empty();
+  std::filesystem::path avi_output_path;
+  if (avi_enabled) {
+    avi_output_path = out_dir_path / options.avi_out;
+  }
+  bool avi_opened = false;
+  if (avi_enabled && options.frames == 0) {
+    if (!avi_writer.Open(avi_output_path.wstring(), options.width,
+                         options.height, effective_fps)) {
+      avi_failed = true;
+    } else {
+      avi_opened = true;
+    }
+  }
   Sha256 rolling_hash;
 
   for (int frame = 0; frame < options.frames; ++frame) {
-    const int fps_value = (options.fps > 0) ? options.fps : 1;
-    const int samples_per_frame = static_cast<int>(std::lround(44100.0 / fps_value));
+    const int samples_per_frame =
+        static_cast<int>(std::lround(44100.0 / effective_fps));
     const int hop = std::max(1, samples_per_frame / kWaveformSamples);
     const int start_sample = frame * samples_per_frame;
 
@@ -649,6 +675,21 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       break;
     }
 
+    if (avi_enabled && !avi_failed) {
+      if (!avi_opened) {
+        if (!avi_writer.Open(avi_output_path.wstring(), options.width,
+                             options.height, effective_fps)) {
+          avi_failed = true;
+          break;
+        }
+        avi_opened = true;
+      }
+      if (!avi_writer.WriteFrame(frame_rgba.data(), frame_rgba.size())) {
+        avi_failed = true;
+        break;
+      }
+    }
+
     const std::array<uint8_t, 32> frame_digest = Sha256Hash(frame_rgba);
     const std::string frame_hex = Sha256ToHex(frame_digest);
     const std::string csv_line = std::to_string(frame) + "," + frame_hex + "\n";
@@ -668,11 +709,16 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         capture_failed = true;
         break;
       }
+      png_outputs.push_back(png_path);
       std::wcout << L"Wrote " << png_path << L"\n";
     }
   }
 
-  if (!capture_failed && !hash_failed) {
+  if (avi_writer.IsOpen()) {
+    avi_writer.Close();
+  }
+
+  if (!capture_failed && !hash_failed && !avi_failed) {
     if (!FlushFileBuffers(per_frame_file.get())) {
       const DWORD error = GetLastError();
       std::wcerr << L"ERROR: Failed to flush per-frame hash file: "
@@ -685,7 +731,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
   unload_vis(host);
 
-  if (!capture_failed && !hash_failed) {
+  if (!capture_failed && !hash_failed && !avi_failed) {
     const std::array<uint8_t, 32> rolling_digest = rolling_hash.Final();
     const std::string rolling_hex = Sha256ToHex(rolling_digest);
     const std::string rolling_line = rolling_hex + "\n";
@@ -712,7 +758,39 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
   }
 
-  if (capture_failed || hash_failed) {
+  if (capture_failed || hash_failed || avi_failed) {
+    return 1;
+  }
+
+  ManifestInfo manifest;
+  manifest.out_dir = out_dir_path;
+  manifest.vis_dll_path = options.vis_dll;
+  manifest.runtime_dir = options.runtime_dir;
+  manifest.has_vis_avs_dat = !options.vis_avs_dat.empty();
+  if (manifest.has_vis_avs_dat) {
+    manifest.vis_avs_dat_path = options.vis_avs_dat;
+  }
+  manifest.has_preset = !options.preset.empty();
+  if (manifest.has_preset) {
+    manifest.preset_path = options.preset;
+  }
+  manifest.wav_path = options.wav;
+  manifest.wav_sample_rate = wav_sample_rate;
+  manifest.wav_channels = wav_channels;
+  manifest.wav_sample_count = wav_sample_count;
+  manifest.width = options.width;
+  manifest.height = options.height;
+  manifest.fps = options.fps;
+  manifest.frames = options.frames;
+  manifest.png_paths = png_outputs;
+  manifest.per_frame_hash_path = per_frame_csv_path;
+  manifest.rolling_hash_path = rolling_hash_path;
+  manifest.has_avi_output = avi_enabled && avi_opened && !avi_failed;
+  if (manifest.has_avi_output) {
+    manifest.avi_output_path = avi_output_path;
+  }
+
+  if (!WriteManifest(manifest)) {
     return 1;
   }
 
