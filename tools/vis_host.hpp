@@ -1,0 +1,19 @@
+#pragma once
+
+#include <string>
+
+#include <windows.h>
+
+#include <winamp/vis.h>
+
+struct VisHost {
+  HMODULE dll = nullptr;
+  winampVisHeader *hdr = nullptr;
+  winampVisModule *mod = nullptr;
+  HWND parent = nullptr;
+  HWND child = nullptr;
+};
+
+VisHost load_vis(const std::wstring &dll_path, HWND parent);
+
+void unload_vis(VisHost &host);

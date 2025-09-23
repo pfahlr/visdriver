@@ -7,7 +7,119 @@
 #include <string>
 #include <vector>
 
+#include <windows.h>
+
+#include "vis_host.hpp"
+
 namespace {
+
+constexpr wchar_t kParentWindowClassName[] = L"visdriver.avs.parent";
+constexpr wchar_t kChildWindowClassName[] = L"visdriver.avs.child";
+
+std::wstring FormatWindowsErrorMessage(DWORD error_code) {
+  wchar_t *buffer = nullptr;
+  const DWORD flags =
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+      FORMAT_MESSAGE_IGNORE_INSERTS;
+  const DWORD size =
+      FormatMessageW(flags, nullptr, error_code,
+                     MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                     reinterpret_cast<wchar_t *>(&buffer), 0, nullptr);
+  std::wstring message;
+  if (size != 0 && buffer != nullptr) {
+    message.assign(buffer, size);
+    while (!message.empty() &&
+           (message.back() == L'\r' || message.back() == L'\n')) {
+      message.pop_back();
+    }
+  } else {
+    message = L"Unknown error";
+  }
+  if (buffer != nullptr) {
+    LocalFree(buffer);
+  }
+  return message;
+}
+
+LRESULT CALLBACK DummyWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+bool RegisterWindowClass(const wchar_t *class_name) {
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+
+  WNDCLASSEXW cls{};
+  cls.cbSize = sizeof(cls);
+  cls.style = CS_HREDRAW | CS_VREDRAW;
+  cls.lpfnWndProc = DummyWindowProc;
+  cls.hInstance = instance;
+  cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  cls.lpszClassName = class_name;
+
+  const ATOM atom = RegisterClassExW(&cls);
+  if (atom != 0) {
+    return true;
+  }
+
+  const DWORD error = GetLastError();
+  if (error == ERROR_CLASS_ALREADY_EXISTS) {
+    return true;
+  }
+
+  std::wcerr << L"ERROR: Failed to register window class '" << class_name
+             << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+  return false;
+}
+
+HWND CreateHiddenParentWindow(int width, int height) {
+  if (!RegisterWindowClass(kParentWindowClassName)) {
+    return nullptr;
+  }
+
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+
+  RECT rect{0, 0, width, height};
+  if (!AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, WS_EX_TOOLWINDOW)) {
+    const DWORD error = GetLastError();
+    std::wcerr << L"ERROR: AdjustWindowRectEx failed: "
+               << FormatWindowsErrorMessage(error) << L"\n";
+    return nullptr;
+  }
+
+  const int window_width = rect.right - rect.left;
+  const int window_height = rect.bottom - rect.top;
+
+  HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kParentWindowClassName,
+                              L"visdriver avs parent", WS_OVERLAPPEDWINDOW,
+                              CW_USEDEFAULT, CW_USEDEFAULT, window_width,
+                              window_height, nullptr, nullptr, instance,
+                              nullptr);
+  if (hwnd == nullptr) {
+    const DWORD error = GetLastError();
+    std::wcerr << L"ERROR: Failed to create parent window: "
+               << FormatWindowsErrorMessage(error) << L"\n";
+  }
+  return hwnd;
+}
+
+HWND CreateChildWindow(HWND parent, int width, int height) {
+  if (!RegisterWindowClass(kChildWindowClassName)) {
+    return nullptr;
+  }
+
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+  HWND hwnd = CreateWindowExW(0, kChildWindowClassName, L"visdriver avs child",
+                              WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS |
+                                  WS_VISIBLE,
+                              0, 0, width, height, parent, nullptr, instance,
+                              nullptr);
+  if (hwnd == nullptr) {
+    const DWORD error = GetLastError();
+    std::wcerr << L"ERROR: Failed to create child window: "
+               << FormatWindowsErrorMessage(error) << L"\n";
+  }
+  return hwnd;
+}
 
 enum class HashMode {
   kPixels,
@@ -210,6 +322,44 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   PrintSummary(options);
+
+  if (!SetCurrentDirectoryW(options.runtime_dir.c_str())) {
+    const DWORD error = GetLastError();
+    std::wcerr << L"ERROR: Failed to set current directory to '"
+               << options.runtime_dir << L"': "
+               << FormatWindowsErrorMessage(error) << L"\n";
+    return 1;
+  }
+
+  HWND parent_window = CreateHiddenParentWindow(options.width, options.height);
+  if (parent_window == nullptr) {
+    return 1;
+  }
+
+  VisHost host = load_vis(options.vis_dll, parent_window);
+  if (host.dll == nullptr || host.hdr == nullptr || host.mod == nullptr) {
+    unload_vis(host);
+    return 1;
+  }
+
+  host.child = CreateChildWindow(parent_window, options.width, options.height);
+  if (host.child == nullptr) {
+    unload_vis(host);
+    return 1;
+  }
+
+  host.mod->hwndParent = host.child;
+  host.mod->hDllInstance = host.dll;
+  host.mod->sRate = 44100;
+  host.mod->nCh = 2;
+  host.mod->latencyMs = 0;
+  host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
+  host.mod->spectrumNch = 2;
+  host.mod->waveformNch = 2;
+
+  std::wcout << L"loaded vis module\n";
+
+  unload_vis(host);
 
   return 0;
 }
