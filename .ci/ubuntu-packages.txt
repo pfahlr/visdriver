@@ -1,4 +1,4 @@
 build-essential
-cmake 
+cmake
+ccache
 mingw-w64
-
