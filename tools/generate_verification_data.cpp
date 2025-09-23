@@ -53,7 +53,7 @@ bool RegisterWindowClass(const wchar_t *class_name) {
   cls.style = CS_HREDRAW | CS_VREDRAW;
   cls.lpfnWndProc = DummyWindowProc;
   cls.hInstance = instance;
-  cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  cls.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(IDC_ARROW));
   cls.lpszClassName = class_name;
 
   const ATOM atom = RegisterClassExW(&cls);
