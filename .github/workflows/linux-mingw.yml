@@ -27,20 +27,16 @@ on:
 
 jobs:
   linux-mingw:
-    name: Build on Linux
     runs-on: ubuntu-24.04
-
     env:
-      # Where we store deb archives to avoid re-downloading on every run
-      APT_CACHE_DIR: ${{ runner.temp }}/apt-cache
-
+      APT_CACHE_DIR: .apt-cache   # <- use a relative path inside the workspace
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Restore APT archive cache
         uses: actions/cache@v4
         with:
-          path: ${{ env.APT_CACHE_DIR }}
+          path: .apt-cache                               # <- matches env above
           key: ${{ runner.os }}-${{ runner.image }}-apt-archives-${{ hashFiles('.ci/ubuntu-packages.txt') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.image }}-apt-archives-
@@ -48,10 +44,9 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          set -x
+          set -euo pipefail
           sudo apt-get update
-          # Point apt's archive cache to the restored dir
-          sudo apt-get -o dir::cache::archives="${APT_CACHE_DIR}" \
+          sudo apt-get -o dir::cache::archives="${GITHUB_WORKSPACE}/${APT_CACHE_DIR}" \
             install --yes --no-install-recommends -V \
             $(grep -vE '^\s*#' .ci/ubuntu-packages.txt | xargs)
 
