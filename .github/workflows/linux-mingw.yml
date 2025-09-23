@@ -29,30 +29,32 @@ jobs:
   linux-mingw:
     runs-on: ubuntu-24.04
     env:
-      APT_CACHE_DIR: .apt-cache   # <- use a relative path inside the workspace
+      APT_CACHE_DIR: .apt-cache   # workspace-relative cache dir
+
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+
+      # Ensure cache dirs exist even if restore finds nothing
+      - name: Precreate cache dirs
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial"
+          mkdir -p "${HOME}/.cache/cmake"
 
       - name: Restore APT archive cache
         uses: actions/cache@v4
         with:
-          path: .apt-cache                               # <- matches env above
-          key: ${{ runner.os }}-${{ runner.image }}-apt-archives-${{ hashFiles('.ci/ubuntu-packages.txt') }}
+          path: .apt-cache
+          key: ubuntu-24.04-apt-archives-${{ hashFiles('.ci/ubuntu-packages.txt') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.image }}-apt-archives-
-            ${{ runner.os }}-apt-archives-
+            ubuntu-24.04-apt-archives-
+            apt-archives-
 
       - name: Prepare APT cache dir
         run: |
           set -euo pipefail
-          mkdir -p "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial"
-          # Make sure we own it before apt touches it (helps on first run)
+          # Ensure perms are sane (important on first run)
           chmod -R u+rwX "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
-
-      - name: Prepare APT cache dir
-        run: |
-          set -euo pipefail
-          mkdir -p "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial"
 
       - name: Install build dependencies
         run: |
@@ -66,33 +68,19 @@ jobs:
             echo "No packages listed in .ci/ubuntu-packages.txt"
           fi
 
-      # Reclaim permissions so the cache action can read/save the directory
-      - name: Sanitize APT cache for saving
-        if: always()
-        run: |
-          set -euo pipefail
-          # Remove apt lockfiles; they're useless in the cache and can be root-owned
-          rm -f "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/lock" || true
-          rm -f "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial/lock" || true
-          # Ensure the runner owns everything so actions/cache can tar it
-          sudo chown -R "$USER":"$USER" "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
-          chmod -R u+rwX "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
-          # (optional) Cache CMake downloads too
-
-      - name: Cache CMake downloads
+      - name: Restore CMake downloads cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/cmake
-          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt', 'cmake/**/*.cmake') }}
+          key: ubuntu-24.04-cmake-${{ hashFiles('CMakeLists.txt', 'cmake/**/*.cmake') }}
           restore-keys: |
-            ${{ runner.os }}-cmake-
+            ubuntu-24.04-cmake-
+            cmake-
 
-      # Set up and cache ccache (works for i686-w64-mingw32-* compilers too)
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2.19
         with:
-          # Key on OS, toolchain file (compiler choice), and build graph
-          key: ${{ runner.os }}-mingw-${{ hashFiles('cmake/mingw-toolchain.cmake', 'CMakeLists.txt', 'cmake/**/*.cmake') }}
+          key: linux-mingw-${{ hashFiles('cmake/mingw-toolchain.cmake', 'CMakeLists.txt', 'cmake/**/*.cmake', 'src/**') }}
           max-size: 750M
 
       - name: Configure
@@ -105,7 +93,7 @@ jobs:
             -S . \
             -B build
 
-      - name: Make
+      - name: Build
         run: |
           make -C build -j"$(nproc)" VERBOSE=1
 
@@ -128,3 +116,18 @@ jobs:
           name: "visdriver_win32bin_mingw_${{ github.sha }}"
           path: "visdriver_win32bin_mingw_${{ github.sha }}/"
           if-no-files-found: error
+
+      # ---- Post-job cleanup / sanitize steps ----
+      - name: Sanitize APT cache for saving
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -f "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/lock" || true
+          rm -f "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}/partial/lock" || true
+          sudo chown -R "$USER":"$USER" "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
+          chmod -R u+rwX "${GITHUB_WORKSPACE}/${APT_CACHE_DIR}"
+
+      - name: Sanitize CMake cache for saving
+        if: always()
+        run: |
+          mkdir -p "${HOME}/.cache/cmake"
