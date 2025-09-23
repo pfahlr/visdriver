@@ -40,6 +40,7 @@ add_executable(visdriver
         src/vis_plugin.c
         src/visualization.c
         tools/generate_verification_data.cpp
+        tools/wav_reader.cpp
         tools/vis_host.cpp
         src/thirdparty/argparse/argparse.c
         src/thirdparty/kissfft/kiss_fft.c
