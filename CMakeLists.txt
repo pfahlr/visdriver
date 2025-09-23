@@ -39,6 +39,7 @@ add_executable(visdriver
         src/output_plugin.c
         src/vis_plugin.c
         src/visualization.c
+        tools/capture.cpp
         tools/generate_verification_data.cpp
         tools/spectrum.cpp
         tools/wav_reader.cpp
