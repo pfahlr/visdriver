@@ -51,6 +51,14 @@ add_executable(visdriver
         third_party/kissfft/kiss_fft.c
         third_party/kissfft/kiss_fftr.c
         )
+# after add_executable(visdriver ...)
+
+# Link libstdc++ and libgcc statically so those DLLs aren't needed at runtime
+target_link_options(visdriver PRIVATE -static-libstdc++ -static-libgcc)
+
+# Optional: also try to fully static link (pulls in libwinpthread, etc.)
+# Beware: this can increase size and occasionally cause TLS/WSA quirks.
+# target_link_options(visdriver PRIVATE -static)
 
 set_target_properties(visdriver PROPERTIES
         CXX_STANDARD 17
