@@ -309,23 +309,50 @@ struct Options {
 };
 
 void PrintUsage(const std::wstring &command_name) {
-  std::wcout << L"Usage: " << command_name
-             << L" [OPTIONS]\n\n"
-             << L"Options:\n"
-             << L"  --vis-dll <path>        Path to vis DLL (required)\n"
-             << L"  --runtime-dir <dir>     Runtime directory (defaults to directory of vis DLL\")\n"
-             << L"  --vis-avs-dat <path>    Optional path to vis_avs.dat\n"
-             << L"  --preset <path>         Optional path to preset file\n"
-             << L"  --wav <path>            Path to WAV input (required)\n"
-             << L"  --width <pixels>        Output width (default: 640)\n"
-             << L"  --height <pixels>       Output height (default: 480)\n"
-             << L"  --fps <value>           Frames per second (default: 60)\n"
-             << L"  --frames <count>        Number of frames to render (default: 121)\n"
-             << L"  --out-dir <dir>         Output directory (required)\n"
-             << L"  --avi-out <filename>    Optional AVI output filename\n"
-             << L"  --png-step <value>      Interval between PNG dumps (default: 1)\n"
-             << L"  --hash-mode <mode>      Hashing mode: pixels|rolling (default: pixels)\n"
-             << L"  --help                  Show this help message\n";
+  struct OptionHelp {
+    const wchar_t *flag;
+    const wchar_t *description;
+  };
+
+  const std::array<OptionHelp, 14> kOptions = {
+      OptionHelp{L"--vis-dll <path>", L"Path to vis DLL (required)"},
+      OptionHelp{L"--runtime-dir <dir>",
+                 L"Runtime directory (default: directory of vis DLL)"},
+      OptionHelp{L"--vis-avs-dat <path>", L"Optional path to vis_avs.dat"},
+      OptionHelp{L"--preset <path>", L"Optional path to preset file"},
+      OptionHelp{L"--wav <path>", L"Path to WAV input (required)"},
+      OptionHelp{L"--width <pixels>", L"Output width (default: 640)"},
+      OptionHelp{L"--height <pixels>", L"Output height (default: 480)"},
+      OptionHelp{L"--fps <value>", L"Frames per second (default: 60)"},
+      OptionHelp{L"--frames <count>",
+                 L"Number of frames to render (default: 121)"},
+      OptionHelp{L"--out-dir <dir>", L"Output directory (required)"},
+      OptionHelp{L"--avi-out <filename>", L"Optional AVI output filename"},
+      OptionHelp{L"--png-step <value>",
+                 L"Interval between PNG dumps (default: 1)"},
+      OptionHelp{L"--hash-mode <mode>",
+                 L"Hashing mode: pixels|rolling (default: pixels)"},
+      OptionHelp{L"--help, -h", L"Show this help message"},
+  };
+
+  size_t max_flag_width = 0;
+  for (const OptionHelp &option : kOptions) {
+    max_flag_width =
+        std::max(max_flag_width, static_cast<size_t>(std::wcslen(option.flag)));
+  }
+
+  std::wcout << L"Usage: " << command_name << L" [OPTIONS]\n\n";
+  std::wcout << L"Options:\n";
+  for (const OptionHelp &option : kOptions) {
+    const size_t flag_width = static_cast<size_t>(std::wcslen(option.flag));
+    std::wcout << L"  " << option.flag;
+    if (flag_width < max_flag_width) {
+      std::wcout << std::wstring(max_flag_width - flag_width + 2, L' ');
+    } else {
+      std::wcout << L"  ";
+    }
+    std::wcout << option.description << L"\n";
+  }
 }
 
 std::wstring ToLower(std::wstring value) {
