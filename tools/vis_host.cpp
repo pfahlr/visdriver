@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+#include "diagnostics.hpp"
+
 namespace {
 
 std::wstring FormatWindowsErrorMessage(DWORD error_code) {
@@ -40,13 +42,22 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: Failed to load vis DLL '" << dll_path
                << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"load_vis: LoadLibraryW failed for '%ls' (error=%lu)",
+                     dll_path.c_str(), error);
     return host;
+  }
+  diagnostics::Log(L"load_vis: loaded '%ls' at %p", dll_path.c_str(), host.dll);
+
+  if (!diagnostics::InstallHooksForModule(host.dll, dll_path.c_str())) {
+    diagnostics::Log(L"load_vis: failed to hook module '%ls'", dll_path.c_str());
   }
 
   FARPROC proc = GetProcAddress(host.dll, "winampVisGetHeader");
   if (proc == nullptr) {
     std::wcerr << L"ERROR: Symbol 'winampVisGetHeader' not found in '" << dll_path
                << L"'.\n";
+    diagnostics::Log(L"load_vis: winampVisGetHeader not found in '%ls'",
+                     dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -57,6 +68,8 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (header == nullptr) {
     std::wcerr << L"ERROR: winampVisGetHeader returned null for '" << dll_path
                << L"'.\n";
+    diagnostics::Log(L"load_vis: winampVisGetHeader returned null for '%ls'",
+                     dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -65,6 +78,9 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (header->getModule == nullptr) {
     std::wcerr << L"ERROR: winampVisHeader::getModule is null in '" << dll_path
                << L"'.\n";
+    diagnostics::Log(
+        L"load_vis: header->getModule null for '%ls'",
+        dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -74,6 +90,8 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (module == nullptr) {
     std::wcerr << L"ERROR: Failed to fetch first vis module from '" << dll_path
                << L"'.\n";
+    diagnostics::Log(L"load_vis: getModule(0) returned null for '%ls'",
+                     dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -82,21 +100,28 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   host.hdr = header;
   host.mod = module;
 
+  diagnostics::Log(L"load_vis: module description='%hs'",
+                   host.mod->description != nullptr ? host.mod->description
+                                                     : "(null)");
+
   return host;
 }
 
 void unload_vis(VisHost &host) {
   if (host.child != nullptr) {
+    diagnostics::Log(L"unload_vis: DestroyWindow child=%p", host.child);
     DestroyWindow(host.child);
     host.child = nullptr;
   }
   if (host.parent != nullptr) {
+    diagnostics::Log(L"unload_vis: DestroyWindow parent=%p", host.parent);
     DestroyWindow(host.parent);
     host.parent = nullptr;
   }
   host.hdr = nullptr;
   host.mod = nullptr;
   if (host.dll != nullptr) {
+    diagnostics::Log(L"unload_vis: FreeLibrary %p", host.dll);
     FreeLibrary(host.dll);
     host.dll = nullptr;
   }
@@ -105,6 +130,7 @@ void unload_vis(VisHost &host) {
 bool begin_vis(VisHost &host, int width, int height) {
   if (host.mod == nullptr) {
     std::wcerr << L"ERROR: Visualization module handle is null.\n";
+    diagnostics::Log(L"begin_vis: module handle null");
     return false;
   }
 
@@ -120,29 +146,37 @@ bool begin_vis(VisHost &host, int width, int height) {
   if (target_window != nullptr) {
     SetWindowPos(target_window, nullptr, 0, 0, width, height,
                  SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE);
+    diagnostics::Log(L"begin_vis: configured target_window=%p size=%dx%d",
+                     target_window, width, height);
   }
 
   if (host.mod->Init == nullptr) {
     std::wcerr << L"ERROR: Visualization module is missing Init().\n";
+    diagnostics::Log(L"begin_vis: module missing Init");
     return false;
   }
 
+  diagnostics::Log(L"begin_vis: calling Init on module=%p", host.mod);
   const int init_result = host.mod->Init(host.mod);
   if (init_result != 0) {
     std::wcerr << L"ERROR: Visualization module Init() returned "
                << init_result << L".\n";
+    diagnostics::Log(L"begin_vis: Init returned %d", init_result);
     return false;
   }
 
+  diagnostics::Log(L"begin_vis: Init succeeded");
   return true;
 }
 
 void end_vis(VisHost &host) {
   if (host.mod != nullptr && host.mod->Quit != nullptr) {
+    diagnostics::Log(L"end_vis: calling Quit on module=%p", host.mod);
     host.mod->Quit(host.mod);
   }
 
   if (host.child != nullptr) {
+    diagnostics::Log(L"end_vis: DestroyWindow child=%p", host.child);
     DestroyWindow(host.child);
     host.child = nullptr;
   }

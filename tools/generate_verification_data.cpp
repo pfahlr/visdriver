@@ -38,6 +38,7 @@ typedef struct _DROPFILES {
 
 #include "avi_writer.hpp"
 #include "capture.hpp"
+#include "diagnostics.hpp"
 #include "manifest.hpp"
 #include "spectrum.hpp"
 #include "sha256.hpp"
@@ -60,7 +61,11 @@ HWND g_embedded_vis_window = nullptr;
 bool PumpPendingWindowMessages() {
   MSG msg;
   while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    diagnostics::Log(L"PumpPendingWindowMessages: msg=%u hwnd=%p", msg.message,
+                     msg.hwnd);
     if (msg.message == WM_QUIT) {
+      diagnostics::Log(L"PumpPendingWindowMessages: WM_QUIT received, code=%d",
+                       static_cast<int>(msg.wParam));
       PostQuitMessage(static_cast<int>(msg.wParam));
       return false;
     }
@@ -78,22 +83,30 @@ bool RequestEmbeddedVisWindow(const VisHost &host) {
     command_target = host.parent;
   }
   if (command_target == nullptr) {
+    diagnostics::Log(L"RequestEmbeddedVisWindow: no command target available");
     return false;
   }
 
+  diagnostics::Log(L"RequestEmbeddedVisWindow: sending IPC_GETVISWND to %p",
+                   command_target);
   DWORD_PTR response = 0;
   const LRESULT status = SendMessageTimeoutW(
       command_target, WM_WA_IPC, 0, IPC_GETVISWND, SMTO_NORMAL, 100,
       reinterpret_cast<PDWORD_PTR>(&response));
   if (status == 0) {
+    diagnostics::Log(L"RequestEmbeddedVisWindow: SendMessageTimeoutW failed (error=%lu)",
+                     GetLastError());
     return false;
   }
 
   HWND candidate = reinterpret_cast<HWND>(response);
   if (candidate != nullptr && IsWindow(candidate)) {
     g_embedded_vis_window = candidate;
+    diagnostics::Log(L"RequestEmbeddedVisWindow: received hwnd=%p", candidate);
     return true;
   }
+  diagnostics::Log(L"RequestEmbeddedVisWindow: response=%p but IsWindow returned false",
+                   candidate);
   return false;
 }
 
@@ -102,6 +115,8 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     return true;
   }
 
+  diagnostics::Log(L"WaitForEmbeddedVisWindow: waiting up to %lu ms",
+                   static_cast<unsigned long>(timeout_ms));
   if (!PumpPendingWindowMessages()) {
     return false;
   }
@@ -125,11 +140,14 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
 
     HWND current_window = g_embedded_vis_window;
     if (current_window != nullptr && IsWindow(current_window)) {
+      diagnostics::Log(L"WaitForEmbeddedVisWindow: found hwnd=%p", current_window);
       return true;
     }
 
     const ULONGLONG elapsed = GetTickCount64() - start;
     if (elapsed >= timeout) {
+      diagnostics::Log(L"WaitForEmbeddedVisWindow: timeout after %llu ms",
+                       static_cast<unsigned long long>(elapsed));
       break;
     }
 
@@ -140,6 +158,8 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
         0, nullptr, wait_duration, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     if (wait_result == WAIT_FAILED) {
       const DWORD wait_error = GetLastError();
+      diagnostics::Log(L"WaitForEmbeddedVisWindow: MsgWaitForMultipleObjectsEx failed (error=%lu)",
+                       wait_error);
       if (wait_error == ERROR_INVALID_PARAMETER) {
         if (wait_duration > 0) {
           Sleep(wait_duration);
@@ -155,6 +175,7 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     RequestEmbeddedVisWindow(host);
   }
 
+  diagnostics::Log(L"WaitForEmbeddedVisWindow: no window located");
   return g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window);
 }
 
@@ -255,16 +276,22 @@ std::wstring FormatWindowsErrorMessage(DWORD error_code) {
 bool EnsureDirectoryExists(const std::wstring &path) {
   if (path.empty()) {
     std::wcerr << L"ERROR: Directory path is empty.\n";
+    diagnostics::Log(L"EnsureDirectoryExists: empty path");
     return false;
   }
 
+  diagnostics::Log(L"EnsureDirectoryExists: '%ls'", path.c_str());
   const DWORD attributes = GetFileAttributesW(path.c_str());
   if (attributes != INVALID_FILE_ATTRIBUTES) {
     if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      diagnostics::Log(L"EnsureDirectoryExists: already exists '%ls'",
+                       path.c_str());
       return true;
     }
     std::wcerr << L"ERROR: Path '" << path
                << L"' exists but is not a directory.\n";
+    diagnostics::Log(L"EnsureDirectoryExists: not a directory '%ls'",
+                     path.c_str());
     return false;
   }
 
@@ -272,6 +299,8 @@ bool EnsureDirectoryExists(const std::wstring &path) {
   if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
     std::wcerr << L"ERROR: GetFileAttributesW failed for '" << path
                << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"EnsureDirectoryExists: GetFileAttributesW failed '%ls' (error=%lu)",
+                     path.c_str(), error);
     return false;
   }
 
@@ -279,21 +308,28 @@ bool EnsureDirectoryExists(const std::wstring &path) {
   const std::filesystem::path parent = dir_path.parent_path();
   if (!parent.empty() && parent != dir_path) {
     if (!EnsureDirectoryExists(parent.wstring())) {
+      diagnostics::Log(L"EnsureDirectoryExists: parent creation failed '%ls'",
+                       parent.wstring().c_str());
       return false;
     }
   }
 
   if (CreateDirectoryW(path.c_str(), nullptr)) {
+    diagnostics::Log(L"EnsureDirectoryExists: created '%ls'", path.c_str());
     return true;
   }
 
   const DWORD create_error = GetLastError();
   if (create_error == ERROR_ALREADY_EXISTS) {
+    diagnostics::Log(L"EnsureDirectoryExists: already exists after create '%ls'",
+                     path.c_str());
     return true;
   }
 
   std::wcerr << L"ERROR: Failed to create directory '" << path
              << L"': " << FormatWindowsErrorMessage(create_error) << L"\n";
+  diagnostics::Log(L"EnsureDirectoryExists: CreateDirectory failed '%ls' (error=%lu)",
+                   path.c_str(), create_error);
   return false;
 }
 
@@ -327,6 +363,7 @@ void ResizeEmbeddedWindow(HWND container) {
 }
 
 LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  diagnostics::NotifyWindowMessage(hwnd, msg, wParam, lParam);
   switch (msg) {
     case WM_NCDESTROY:
       if (hwnd == g_child_container_window) {
@@ -477,12 +514,16 @@ HWND CreateHiddenParentWindow(int width, int height) {
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: AdjustWindowRectEx failed: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"CreateHiddenParentWindow: AdjustWindowRectEx failed (error=%lu)",
+                     error);
     return nullptr;
   }
 
   const int window_width = rect.right - rect.left;
   const int window_height = rect.bottom - rect.top;
 
+  diagnostics::Log(L"CreateHiddenParentWindow: creating parent %dx%d", width,
+                   height);
   HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kParentWindowClassName,
                               L"visdriver avs parent", WS_OVERLAPPEDWINDOW,
                               CW_USEDEFAULT, CW_USEDEFAULT, window_width,
@@ -492,6 +533,10 @@ HWND CreateHiddenParentWindow(int width, int height) {
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: Failed to create parent window: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"CreateHiddenParentWindow: CreateWindowExW failed (error=%lu)",
+                     error);
+  } else {
+    diagnostics::Log(L"CreateHiddenParentWindow: hwnd=%p", hwnd);
   }
   g_parent_window = hwnd;
   g_embedded_vis_window = nullptr;
@@ -504,6 +549,8 @@ HWND CreateChildWindow(HWND parent, int width, int height) {
   }
 
   HINSTANCE instance = GetModuleHandleW(nullptr);
+  diagnostics::Log(L"CreateChildWindow: parent=%p size=%dx%d", parent, width,
+                   height);
   HWND hwnd = CreateWindowExW(0, kChildWindowClassName, L"visdriver avs child",
                               WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS |
                                   WS_VISIBLE,
@@ -513,6 +560,10 @@ HWND CreateChildWindow(HWND parent, int width, int height) {
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: Failed to create child window: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"CreateChildWindow: CreateWindowExW failed (error=%lu)",
+                     error);
+  } else {
+    diagnostics::Log(L"CreateChildWindow: hwnd=%p", hwnd);
   }
   g_child_container_window = hwnd;
   return hwnd;
@@ -974,10 +1025,46 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   const std::filesystem::path frames_dir_path = out_dir_path / L"frames";
   const std::filesystem::path hashes_dir_path = out_dir_path / L"hashes";
+  const std::filesystem::path logs_dir_path = out_dir_path / L"logs";
 
   if (!EnsureDirectoryExists(out_dir_path.wstring())) {
     return 1;
   }
+  if (!EnsureDirectoryExists(logs_dir_path.wstring())) {
+    return 1;
+  }
+
+  const std::filesystem::path diagnostics_log_path =
+      logs_dir_path / L"avs_diagnostics.log";
+  if (!diagnostics::Initialize(diagnostics_log_path.wstring())) {
+    std::wcerr << L"ERROR: Failed to initialize diagnostics log at '"
+               << diagnostics_log_path.wstring() << L"'.\n";
+    return 1;
+  }
+  struct DiagnosticsScope {
+    bool active = false;
+    ~DiagnosticsScope() {
+      if (active) {
+        diagnostics::Shutdown();
+      }
+    }
+  } diagnostics_scope;
+  diagnostics_scope.active = true;
+  diagnostics::Log(L"Diagnostics log ready at %ls",
+                   diagnostics_log_path.wstring().c_str());
+  diagnostics::Log(L"Command %ls starting", command_name.c_str());
+
+  if (!diagnostics::InstallHooksForCurrentProcess()) {
+    diagnostics::Log(L"WARNING: Failed to install hooks for current process");
+  }
+
+  diagnostics::Log(L"Options: vis_dll='%ls' runtime_dir='%ls' wav='%ls' preset='%ls'"
+                   L" size=%dx%d fps=%d frames=%d out_dir='%ls'",
+                   options.vis_dll.c_str(), options.runtime_dir.c_str(),
+                   options.wav.c_str(), options.preset.c_str(), options.width,
+                   options.height, options.fps, options.frames,
+                   options.out_dir.c_str());
+
   if (!EnsureDirectoryExists(frames_dir_path.wstring())) {
     return 1;
   }
@@ -1026,6 +1113,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   } catch (const std::exception &ex) {
     std::wcerr << L"ERROR: Failed to load WAV: "
                << ConvertToWide(std::string(ex.what())) << L"\n";
+    diagnostics::Log(L"Failed to load WAV '%ls': %ls", options.wav.c_str(),
+                     ConvertToWide(std::string(ex.what())).c_str());
     return 1;
   }
 
@@ -1034,10 +1123,14 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     std::wcerr << L"ERROR: Failed to set current directory to '"
                << options.runtime_dir << L"': "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"SetCurrentDirectoryW failed for '%ls' (error=%lu)",
+                     options.runtime_dir.c_str(), error);
     return 1;
   }
   std::wcout << L"Switched to runtime directory: " << options.runtime_dir
              << L"\n";
+  diagnostics::Log(L"Current directory set to '%ls'",
+                   options.runtime_dir.c_str());
 
   HWND parent_window = CreateHiddenParentWindow(options.width, options.height);
   if (parent_window == nullptr) {
@@ -1066,6 +1159,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     unload_vis(host);
     return 1;
   }
+  diagnostics::SetExpectedWindows(host.parent, host.child);
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
   if (!begin_vis(host, options.width, options.height)) {
@@ -1230,13 +1324,42 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
                << L": start=" << start_sample << L", hop=" << hop << L"\n";
 
+    diagnostics::MarkFrameStart(frame);
     const int render_result = host.mod->Render(host.mod);
     if (render_result != 0) {
       break;
     }
 
-    if (!capture_child_to_rgba(host.child, options.width, options.height,
-                               frame_rgba)) {
+    bool captured = false;
+    if (diagnostics::IsDummySurfaceActive()) {
+      captured = diagnostics::CaptureDummySurfaceRgba(options.width,
+                                                      options.height, frame_rgba);
+      if (!captured) {
+        diagnostics::Log(
+            L"Capture: dummy surface readback failed for frame %d", frame);
+      }
+    } else {
+      HWND capture_window = g_embedded_vis_window;
+      if (capture_window == nullptr || !IsWindow(capture_window)) {
+        capture_window = host.child;
+      }
+      if (capture_window != nullptr) {
+        captured = capture_child_to_rgba(capture_window, options.width,
+                                         options.height, frame_rgba);
+      } else {
+        diagnostics::Log(
+            L"Capture: no window available, enabling dummy surface (frame %d)",
+            frame);
+        diagnostics::EnableDummySurface(options.width, options.height);
+        if (diagnostics::IsDummySurfaceActive()) {
+          captured = diagnostics::CaptureDummySurfaceRgba(options.width,
+                                                          options.height,
+                                                          frame_rgba);
+        }
+      }
+    }
+
+    if (!captured) {
       std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
       capture_failed = true;
       break;
@@ -1326,6 +1449,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   if (capture_failed || hash_failed || avi_failed) {
+    diagnostics::Log(
+        L"Command terminating with failure flags: capture=%d hash=%d avi=%d",
+        capture_failed ? 1 : 0, hash_failed ? 1 : 0, avi_failed ? 1 : 0);
     return 1;
   }
 
@@ -1362,8 +1488,10 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   if (!WriteManifest(manifest)) {
+    diagnostics::Log(L"Command terminating: manifest write failed");
     return 1;
   }
 
+  diagnostics::Log(L"Command completed successfully");
   return 0;
 }

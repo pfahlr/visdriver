@@ -1,5 +1,7 @@
 #include "capture.hpp"
 
+#include "diagnostics.hpp"
+
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -82,6 +84,8 @@ bool capture_child_to_rgba(HWND child, int width, int height,
                            std::vector<uint8_t> &out_rgba) {
   if (child == nullptr || width <= 0 || height <= 0) {
     std::wcerr << L"ERROR: Invalid parameters for capture_child_to_rgba.\n";
+    diagnostics::Log(L"capture_child_to_rgba: invalid parameters hwnd=%p %dx%d",
+                     child, width, height);
     return false;
   }
 
@@ -90,6 +94,8 @@ bool capture_child_to_rgba(HWND child, int width, int height,
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: GetDC failed: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"capture_child_to_rgba: GetDC failed (error=%lu) hwnd=%p",
+                     error, child);
     return false;
   }
 
@@ -98,6 +104,9 @@ bool capture_child_to_rgba(HWND child, int width, int height,
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: CreateCompatibleDC failed: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(
+        L"capture_child_to_rgba: CreateCompatibleDC failed (error=%lu) hwnd=%p",
+        error, child);
     return false;
   }
 
@@ -117,6 +126,9 @@ bool capture_child_to_rgba(HWND child, int width, int height,
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: CreateDIBSection failed: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(
+        L"capture_child_to_rgba: CreateDIBSection failed (error=%lu) hwnd=%p",
+        error, child);
     return false;
   }
 
@@ -125,6 +137,8 @@ bool capture_child_to_rgba(HWND child, int width, int height,
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: SelectObject failed: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"capture_child_to_rgba: SelectObject failed (error=%lu)",
+                     error);
     return false;
   }
 
@@ -135,6 +149,7 @@ bool capture_child_to_rgba(HWND child, int width, int height,
     SelectObject(memory_dc.get(), old_bitmap);
     std::wcerr << L"ERROR: BitBlt failed: "
                << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Log(L"capture_child_to_rgba: BitBlt failed (error=%lu)", error);
     return false;
   }
 
@@ -152,6 +167,8 @@ bool capture_child_to_rgba(HWND child, int width, int height,
   }
 
   SelectObject(memory_dc.get(), old_bitmap);
+  diagnostics::Log(L"capture_child_to_rgba: captured hwnd=%p size=%dx%d", child,
+                   width, height);
   return true;
 }
 
