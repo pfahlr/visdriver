@@ -59,8 +59,6 @@ its page will list artifacts for download near the bottom.
 
 ## With MinGW/GCC
 
-
-
 ### Configure & Build
 =======
 Install the cross-compilation toolchain and runtime first.  On Ubuntu 24.04
@@ -69,7 +67,7 @@ Wine:
 
 ```console
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine
+sudo apt-get install -y build-essential cmake ccache mingw-w64 wine
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
@@ -78,6 +76,7 @@ file provided by this repository:
 ```console
 cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
 make -C build -j$(nproc) VERBOSE=1
+
 ```
 
 ## With Visual Studio
@@ -86,7 +85,6 @@ make -C build -j$(nproc) VERBOSE=1
 # cmake -G "Visual Studio 17 2022" -A Win32 -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
 # cmake --build build
 ```
-
 
 # How to Run
 
