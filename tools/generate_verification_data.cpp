@@ -214,6 +214,57 @@ void ResizeEmbeddedWindow(HWND container) {
                SWP_NOACTIVATE | SWP_NOZORDER);
 }
 
+LRESULT HandleWinampIpcMessage(HWND sender, WPARAM wParam, LPARAM lParam) {
+  if (sender != g_parent_window && sender != g_child_container_window) {
+    return DefWindowProcW(sender, WM_WA_IPC, wParam, lParam);
+  }
+
+  switch (lParam) {
+    case IPC_GETVERSION:
+      return 0x2900;
+    case IPC_ISPLAYING:
+      return 1;
+    case IPC_GETSKIN:
+      if (wParam != 0) {
+        std::strcpy(reinterpret_cast<char *>(wParam), "/tmp");
+      }
+      return wParam;
+    case IPC_GETINIFILE: {
+      static char ini_path[1024] = "";
+      if (ini_path[0] == '\0') {
+        GetModuleFileNameA(nullptr, ini_path,
+                           static_cast<DWORD>(sizeof(ini_path)));
+        char *const dot_position = std::strrchr(ini_path, '.');
+        if (dot_position == nullptr) {
+          ini_path[0] = '\0';
+        } else {
+          std::strcpy(dot_position, ".ini");
+        }
+      }
+      return reinterpret_cast<LRESULT>(ini_path);
+    }
+    case IPC_GET_EMBEDIF:
+      if (g_parent_window != nullptr) {
+        ShowWindow(g_parent_window, SW_SHOW);
+      }
+      if (wParam == 0) {
+        return reinterpret_cast<LRESULT>(embed_window);
+      }
+      return reinterpret_cast<LRESULT>(
+          embed_window(reinterpret_cast<embedWindowState *>(wParam)));
+    case IPC_SETVISWND:
+      g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
+      if (g_child_container_window != nullptr) {
+        ResizeEmbeddedWindow(g_child_container_window);
+      } else if (g_parent_window != nullptr) {
+        ResizeEmbeddedWindow(g_parent_window);
+      }
+      return 0;
+  }
+
+  return DefWindowProcW(sender, WM_WA_IPC, wParam, lParam);
+}
+
 LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_NCDESTROY:
@@ -234,49 +285,7 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       break;
 
     case WM_WA_IPC:
-      switch (lParam) {
-        case IPC_GETVERSION:
-          return 0x2900;
-        case IPC_ISPLAYING:
-          return 1;
-        case IPC_GETSKIN:
-          if (wParam != 0) {
-            std::strcpy(reinterpret_cast<char *>(wParam), "/tmp");
-          }
-          return wParam;
-        case IPC_GETINIFILE: {
-          static char ini_path[1024] = "";
-          if (ini_path[0] == '\0') {
-            GetModuleFileNameA(nullptr, ini_path,
-                               static_cast<DWORD>(sizeof(ini_path)));
-            char *const dot_position = std::strrchr(ini_path, '.');
-            if (dot_position == nullptr) {
-              ini_path[0] = '\0';
-            } else {
-              std::strcpy(dot_position, ".ini");
-            }
-          }
-          return reinterpret_cast<LRESULT>(ini_path);
-        }
-        case IPC_GET_EMBEDIF:
-          if (g_parent_window != nullptr) {
-            ShowWindow(g_parent_window, SW_SHOW);
-          }
-          if (wParam == 0) {
-            return reinterpret_cast<LRESULT>(embed_window);
-          }
-          return reinterpret_cast<LRESULT>(
-              embed_window(reinterpret_cast<embedWindowState *>(wParam)));
-        case IPC_SETVISWND:
-          g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
-          if (g_child_container_window != nullptr) {
-            ResizeEmbeddedWindow(g_child_container_window);
-          } else if (g_parent_window != nullptr) {
-            ResizeEmbeddedWindow(g_parent_window);
-          }
-          return 0;
-      }
-      break;
+      return HandleWinampIpcMessage(hwnd, wParam, lParam);
   }
 
   return DefWindowProcW(hwnd, msg, wParam, lParam);
