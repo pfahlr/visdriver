@@ -21,6 +21,7 @@
 #include <xmmintrin.h>
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include <winamp/out.h>
 #include <winamp/wa_ipc.h>
@@ -959,6 +960,93 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (!begin_vis(host, options.width, options.height)) {
     unload_vis(host);
     return 1;
+  }
+
+  if (!options.preset.empty()) {
+    if (!std::filesystem::exists(options.preset)) {
+      std::wcerr << L"ERROR: Preset file not found: " << options.preset << L"\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+
+    HWND preset_window = g_embedded_vis_window;
+    if (preset_window == nullptr || !IsWindow(preset_window)) {
+      HWND const command_target = (host.child != nullptr) ? host.child : host.parent;
+      if (command_target != nullptr) {
+        preset_window = reinterpret_cast<HWND>(
+            SendMessage(command_target, WM_WA_IPC, 0, IPC_GETVISWND));
+      }
+    }
+
+    if (preset_window == nullptr || !IsWindow(preset_window)) {
+      std::wcerr << L"ERROR: Failed to locate AVS window for preset load.\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+
+    const size_t preset_length = options.preset.size();
+    const size_t buffer_size =
+        sizeof(DROPFILES) + (preset_length + 2) * sizeof(wchar_t);
+    HGLOBAL drop_handle = GlobalAlloc(GHND | GMEM_SHARE, buffer_size);
+    if (drop_handle == nullptr) {
+      const DWORD error = GetLastError();
+      std::wcerr << L"ERROR: Failed to allocate DROPFILES buffer: "
+                 << FormatWindowsErrorMessage(error) << L"\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+
+    auto drop_info = reinterpret_cast<DROPFILES *>(GlobalLock(drop_handle));
+    if (drop_info == nullptr) {
+      const DWORD error = GetLastError();
+      GlobalFree(drop_handle);
+      std::wcerr << L"ERROR: Failed to lock DROPFILES buffer: "
+                 << FormatWindowsErrorMessage(error) << L"\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+
+    drop_info->pFiles = sizeof(DROPFILES);
+    drop_info->pt.x = 0;
+    drop_info->pt.y = 0;
+    drop_info->fNC = FALSE;
+    drop_info->fWide = TRUE;
+
+    auto payload = reinterpret_cast<wchar_t *>(
+        reinterpret_cast<BYTE *>(drop_info) + sizeof(DROPFILES));
+    std::memcpy(payload, options.preset.c_str(),
+                preset_length * sizeof(wchar_t));
+    payload[preset_length] = L'\0';
+    payload[preset_length + 1] = L'\0';
+
+    GlobalUnlock(drop_handle);
+
+    DWORD_PTR send_result = 0;
+    const LRESULT send_status = SendMessageTimeoutW(
+        preset_window, WM_DROPFILES, reinterpret_cast<WPARAM>(drop_handle), 0,
+        SMTO_BLOCK | SMTO_ABORTIFHUNG, 5000, &send_result);
+    if (send_status == 0) {
+      const DWORD error = GetLastError();
+      DragFinish(reinterpret_cast<HDROP>(drop_handle));
+      std::wcerr << L"ERROR: Failed to deliver preset to AVS window: "
+                 << FormatWindowsErrorMessage(error) << L"\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+
+    if (!IsWindow(preset_window)) {
+      std::wcerr << L"ERROR: AVS window destroyed during preset load.\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+
+    std::wcout << L"Loaded preset: " << options.preset << L"\n";
   }
 
   if (host.mod->Render == nullptr) {
