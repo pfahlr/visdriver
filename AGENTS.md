@@ -5,13 +5,21 @@
 
 * Build with **CMake** and **MinGW**.
 
-* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine32` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
-  Install them with:
+* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`,
+  `mingw-w64`, and Wine packages same as `.ci/ubuntu-packages.txt`. Enable
+  32-bit packages before installing Wine:
 
 ```bash
+sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install --yes \
+    build-essential cmake ccache mingw-w64 \
+    wine wine64 wine32:i386 winbind xvfb
 ```
+
+* If `wine --version` exits with `Exec format error`, the host kernel does not
+  have `CONFIG_IA32_EMULATION` enabled. Use a kernel/VM that supports 32-bit
+  binaries; Wine cannot run otherwise.
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
 ### Build 
@@ -34,7 +42,10 @@ cmake
 ccache
 mingw-w64
 wine
-wine32
+wine64
+wine32:i386
+winbind
+xvfb
 ```
 
 copy the necessary dlls into the directory with the executable 
@@ -68,13 +79,13 @@ configure 32 bit wineprefix to run your app
 ```
 export WINEPREFIX="$HOME/.wine32"
 export WINEARCH=win32
-wineboot -i            
-winecfg
+wineboot --init
+# optional: xvfb-run winecfg
 ```
-then ensure the prefix is set to the environment variable before running 
+then ensure the prefix is set to the environment variable before running
 ```
 cd build
-WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data --vis-dll ./vis_avs.dll  --vis-avs-dat ./vis_avs.dat --runtime-dir ./  --wav ./tests/data/test.wav --preset  ./tests/data/phase1/simple.avs --out-dir ./tests/golden/phase1/simple
+WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data --vis-dll ./vis_avs.dll --vis-avs-dat ./vis_avs.dat --runtime-dir ./ --wav ./tests/data/test.wav --preset ./tests/data/phase1/simple.avs --out-dir ./tests/golden/phase1/simple
 ```
 
 

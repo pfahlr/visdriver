@@ -64,13 +64,22 @@ its page will list artifacts for download near the bottom.
 
 On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
 not available by default. Install the packages that mirror our CI environment
-first
-
+first. Make sure 32-bit packages are enabled before installing Wine:
 
 ```console
+sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install -y build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install -y \
+    build-essential cmake ccache mingw-w64 \
+    wine wine64 wine32:i386 winbind xvfb
 ```
+
+> **Heads-up:** Wine requires Linux kernels with the `CONFIG_IA32_EMULATION`
+> option enabled to execute 32-bit binaries. If `wine --version` exits with
+> `Exec format error`, check `/proc/sys/abi/ia32_emulation`. When that file is
+> missing or contains `0`, the host kernel cannot execute 32-bit code and the
+> Wine runtime will not start. In that case use a different kernel or a virtual
+> machine that provides 32-bit compatibility.
 
 With the dependencies in place, configure and build using the MinGW toolchain
 file provided by this repository.
@@ -92,9 +101,22 @@ make -C build -j$(nproc) VERBOSE=1
 
 # How to Run
 
-Let **visdriver** tell you what it needs:
+After the build finishes copy the support DLLs into the build directory and
+initialise a 32-bit Wine prefix:
 ```console
-# WINEDEBUG=-all wine ./build/visdriver.exe --help
+cp for_codex/dll/* build/
+cp -R for_codex/tests build/
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot --init
+```
+
+If you are on a headless machine, run `winecfg` via `xvfb-run winecfg` or skip
+it entirely; it is only required when you want to tweak Wine settings.
+
+Now let **visdriver** tell you what it needs:
+```console
+WINEPREFIX="$HOME/.wine32" WINEDEBUG=-all wine ./build/visdriver.exe --help
 Usage: visdriver [OPTIONS] --in PATH/IN.dll --out PATH/OUT.dll --vis PATH/VIS.dll [--] [AUDIO_FILE ..]
    or: visdriver --help
    or: visdriver --version
@@ -131,8 +153,9 @@ The locations of these files vary among GNU/Linux distros.
 
 ## `visdriver.exe generate-verification-data` operation
 
-visdriver.ex has beem extended to provide the `generate-verification-data` operation. This has been implemented specifically to support generation of test data
-to be used in the development of new versions/ports of AVS. 
+`visdriver.exe` has been extended to provide the `generate-verification-data`
+operation. This has been implemented specifically to support generation of test
+data to be used in the development of new versions/ports of AVS.
 
 ### CLI-options
 ```
@@ -157,30 +180,30 @@ Options:
 
 ### Example Usage
 
-In this example, visdriver.exe was placed in the Program Files (x86)\Winamp installation directory.
-Take note of the effect of the --runtime-dir option on the other options search paths, it's not possible
-to omit this value as it is automatically set to the path where `vis_avs.dat` is located. It's just 
-a small annoyance.
+In this example, `visdriver.exe` was placed in the `Program Files (x86)\Winamp`
+installation directory. Take note of the effect of the `--runtime-dir` option
+on the other options' search paths: it is automatically set to the path where
+`vis_avs.dat` is located.
 
-```
+```console
 export WINEPREFIX="$HOME/.wine32"
 export WINEARCH=win32
-wineboot -i            
-winecfg
+wineboot --init
+# optional: xvfb-run winecfg
 ```
 
-```
+```console
 # then run your app with that prefix:
-WINEPREFIX="$HOME/.wine32 .\visdriver.exe generate-verification-data`
- --runtime-dir .\Plugins\`
- --vis-avs-dat .\vis_avs.dat`
- --vis-dll .\vis_avs.dll`
- --out-dll .\out_wave.dll`
- --preset .\tests\data\phase1\color_mod.avs`
- --wav .\Plugins\tests\data\electronic.wav`
- --out-dir .\tests\out\`
- --avi-out test.avi
- --width 1000 --height 600
+WINEPREFIX="$HOME/.wine32" wine .\visdriver.exe generate-verification-data \
+  --runtime-dir ".\Plugins\\" \
+  --vis-avs-dat ".\vis_avs.dat" \
+  --vis-dll ".\vis_avs.dll" \
+  --out-dll ".\out_wave.dll" \
+  --preset ".\tests\data\phase1\color_mod.avs" \
+  --wav ".\Plugins\tests\data\electronic.wav" \
+  --out-dir ".\tests\out\\" \
+  --avi-out test.avi \
+  --width 1000 --height 600
 ```
 
 ### CLI Output
