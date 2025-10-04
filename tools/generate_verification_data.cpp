@@ -23,6 +23,16 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#ifndef __DROPFILES_DEFINED
+typedef struct _DROPFILES {
+  DWORD pFiles;
+  POINT pt;
+  BOOL fNC;
+  BOOL fWide;
+} DROPFILES, *LPDROPFILES;
+#define __DROPFILES_DEFINED
+#endif
+
 #include <winamp/out.h>
 #include <winamp/wa_ipc.h>
 

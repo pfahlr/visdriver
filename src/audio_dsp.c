@@ -15,13 +15,14 @@
 // You should have received a copy of the GNU General Public License along
 // with visdriver. If not, see <https://www.gnu.org/licenses/>.
 
+#include "audio_dsp.h"
 #include "log.h"
 
-int __cdecl dsp_isactive() {
+int AUDIO_DSP_CALLCONV dsp_isactive(void) {
   return 1; // i.e. active
 }
 
-int __cdecl dsp_dosamples(short int *samples, int numsamples, int bps, int nch,
-                          int srate) {
+int AUDIO_DSP_CALLCONV dsp_dosamples(short int *samples, int numsamples,
+                                     int bps, int nch, int srate) {
   return numsamples; // i.e. unchanged number of samples
 }
