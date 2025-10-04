@@ -5,12 +5,12 @@
 
 * Build with **CMake** and **MinGW**.
 
-* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine32` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
+* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
   Install them with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine 
 ```
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
@@ -34,7 +34,7 @@ cmake
 ccache
 mingw-w64
 wine
-wine32
+
 ```
 
 copy the necessary dlls into the directory with the executable 
