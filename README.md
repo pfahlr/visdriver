@@ -68,6 +68,7 @@ first
 
 
 ```console
+sudo dpkg --add-architecture i386
 sudo apt-get update
 sudo apt-get install -y build-essential cmake ccache mingw-w64 wine64  wine32:i386
 ```
