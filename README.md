@@ -69,7 +69,7 @@ first
 
 ```console
 sudo apt-get update
-sudo apt-get install -y build-essential cmake ccache mingw-w64 wine 
+sudo apt-get install -y build-essential cmake ccache mingw-w64 wine64  wine32:i386
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
