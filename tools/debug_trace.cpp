@@ -283,6 +283,70 @@ decltype(&SelectObject) g_orig_SelectObject = SelectObject;
 decltype(&PatBlt) g_orig_PatBlt = PatBlt;
 decltype(&DescribePixelFormat) g_orig_DescribePixelFormat = DescribePixelFormat;
 
+template <typename Func>
+void RefreshOriginalFunction(Func &target, HMODULE module, const char *name) {
+  if (module == nullptr) {
+    return;
+  }
+  FARPROC proc = GetProcAddress(module, name);
+  if (proc != nullptr) {
+    target = reinterpret_cast<Func>(proc);
+  }
+}
+
+void EnsureOriginalFunctions() {
+  static std::once_flag once_flag;
+  std::call_once(once_flag, []() {
+    auto load_module = [](const wchar_t *name) -> HMODULE {
+      HMODULE handle = GetModuleHandleW(name);
+      if (handle == nullptr) {
+        handle = LoadLibraryW(name);
+      }
+      return handle;
+    };
+
+    HMODULE user32 = load_module(L"user32.dll");
+    HMODULE gdi32 = load_module(L"gdi32.dll");
+    HMODULE opengl32 = load_module(L"opengl32.dll");
+
+    RefreshOriginalFunction(g_orig_CreateWindowExW, user32, "CreateWindowExW");
+    RefreshOriginalFunction(g_orig_CreateWindowExA, user32, "CreateWindowExA");
+    RefreshOriginalFunction(g_orig_DestroyWindow, user32, "DestroyWindow");
+    RefreshOriginalFunction(g_orig_GetDC, user32, "GetDC");
+    RefreshOriginalFunction(g_orig_GetDCEx, user32, "GetDCEx");
+    RefreshOriginalFunction(g_orig_GetWindowDC, user32, "GetWindowDC");
+    RefreshOriginalFunction(g_orig_ReleaseDC, user32, "ReleaseDC");
+    RefreshOriginalFunction(g_orig_BeginPaint, user32, "BeginPaint");
+    RefreshOriginalFunction(g_orig_EndPaint, user32, "EndPaint");
+
+    RefreshOriginalFunction(g_orig_CreateCompatibleDC, gdi32,
+                            "CreateCompatibleDC");
+    RefreshOriginalFunction(g_orig_DeleteDC, gdi32, "DeleteDC");
+    RefreshOriginalFunction(g_orig_CreateDIBSection, gdi32,
+                            "CreateDIBSection");
+    RefreshOriginalFunction(g_orig_DeleteObject, gdi32, "DeleteObject");
+    RefreshOriginalFunction(g_orig_BitBlt, gdi32, "BitBlt");
+    RefreshOriginalFunction(g_orig_StretchBlt, gdi32, "StretchBlt");
+    RefreshOriginalFunction(g_orig_PatBlt, gdi32, "PatBlt");
+    RefreshOriginalFunction(g_orig_CreateCompatibleBitmap, gdi32,
+                            "CreateCompatibleBitmap");
+    RefreshOriginalFunction(g_orig_SelectObject, gdi32, "SelectObject");
+    RefreshOriginalFunction(g_orig_SwapBuffers, gdi32, "SwapBuffers");
+    RefreshOriginalFunction(g_orig_ChoosePixelFormat, gdi32,
+                            "ChoosePixelFormat");
+    RefreshOriginalFunction(g_orig_SetPixelFormat, gdi32, "SetPixelFormat");
+    RefreshOriginalFunction(g_orig_DescribePixelFormat, gdi32,
+                            "DescribePixelFormat");
+
+    RefreshOriginalFunction(g_orig_wglCreateContext, opengl32,
+                            "wglCreateContext");
+    RefreshOriginalFunction(g_orig_wglMakeCurrent, opengl32,
+                            "wglMakeCurrent");
+    RefreshOriginalFunction(g_orig_wglDeleteContext, opengl32,
+                            "wglDeleteContext");
+  });
+}
+
 template <typename... Args>
 void Logf(const wchar_t *format, Args... args) {
   if (!DebugTraceIsActive()) {
@@ -930,6 +994,7 @@ bool DebugTraceInitialize(const std::wstring &log_path) {
   if (g_log_initialized.load()) {
     return true;
   }
+  EnsureOriginalFunctions();
   g_log_file = CreateFileW(log_path.c_str(), GENERIC_WRITE,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -987,6 +1052,7 @@ void DebugTraceLog(const std::wstring &message) {
 
 bool DebugTraceInstallHooksForModule(HMODULE module,
                                      const std::wstring &module_name) {
+  EnsureOriginalFunctions();
   if (module == nullptr) {
     DebugTraceLog(L"Skipping hook install for %s (module=null)",
                   module_name.c_str());
