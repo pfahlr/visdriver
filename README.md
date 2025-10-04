@@ -59,6 +59,17 @@ its page will list artifacts for download near the bottom.
 
 ## With MinGW/GCC
 
+On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
+not available by default. Install the packages that mirror our CI environment
+first:
+
+```console
+# apt-get update
+# apt-get install -y build-essential cmake ccache mingw-w64 wine
+```
+
+Once the toolchain is present you can configure and build the MinGW target:
+
 ```console
 # cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
 # make -C build -j$(nproc) VERBOSE=1
