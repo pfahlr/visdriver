@@ -60,6 +60,8 @@ its page will list artifacts for download near the bottom.
 ## With MinGW/GCC
 
 ```console
+# sudo apt-get update
+# sudo apt-get install -y build-essential cmake ccache mingw-w64 wine
 # cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
 # make -C build -j$(nproc) VERBOSE=1
 ```

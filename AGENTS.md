@@ -4,7 +4,7 @@
 ## Setup
 
 * Build with **CMake** and **MinGW**.
-* in ubuntu the packages 'build-essential', 'cmake', 'ccache', 'mingw-w64', and 'wine' are needed.
+* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine` packages (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
 ### Build 
