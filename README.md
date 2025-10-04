@@ -68,10 +68,13 @@ not available by default. Install the packages that mirror our CI environment
 first. Enabling the `i386` architecture is required before the 32-bit Wine
 packages (`wine32:i386`) are visible to `apt`:
 
+
 ```console
 sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install -y build-essential cmake ccache mingw-w64 wine wine64 wine32:i386
+sudo apt-get install -y \
+    build-essential cmake ccache mingw-w64 \
+    wine wine64 wine32:i386 winbind xvfb
 ```
 
 If the helper binary `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
@@ -87,6 +90,13 @@ export WINEPREFIX="$HOME/.wine32"
 wineboot -i
 winecfg&    # optional, requires an X11 server
 ```
+
+> **Heads-up:** Wine requires Linux kernels with the `CONFIG_IA32_EMULATION`
+> option enabled to execute 32-bit binaries. If `wine --version` exits with
+> `Exec format error`, check `/proc/sys/abi/ia32_emulation`. When that file is
+> missing or contains `0`, the host kernel cannot execute 32-bit code and the
+> Wine runtime will not start. In that case use a different kernel or a virtual
+> machine that provides 32-bit compatibility.
 
 With the dependencies in place, configure and build using the MinGW toolchain
 file provided by this repository.
@@ -106,6 +116,20 @@ make -C build -j$(nproc) VERBOSE=1
 ```
 
 # How to Run
+
+After the build finishes copy the support DLLs into the build directory and
+initialise a 32-bit Wine prefix:
+```console
+cp for_codex/dll/* build/
+cp -R for_codex/tests build/
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot --init
+```
+
+If you are on a headless machine, run `winecfg` via `xvfb-run winecfg` or skip
+it entirely; it is only required when you want to tweak Wine settings.
+
 
 Before running the executable make sure your Wine installation can launch
 32-bit binaries:
@@ -130,6 +154,7 @@ winecfg&  # optional tweaks
 Let **visdriver** tell you what it needs:
 ```console
 WINEDEBUG=-all WINEPREFIX="$HOME/.wine32" wine ./build/visdriver.exe --help
+
 Usage: visdriver [OPTIONS] --in PATH/IN.dll --out PATH/OUT.dll --vis PATH/VIS.dll [--] [AUDIO_FILE ..]
    or: visdriver --help
    or: visdriver --version
@@ -164,8 +189,9 @@ cp -v \
 
 ## `visdriver.exe generate-verification-data` operation
 
-visdriver.ex has beem extended to provide the `generate-verification-data` operation. This has been implemented specifically to support generation of test data
-to be used in the development of new versions/ports of AVS. 
+`visdriver.exe` has been extended to provide the `generate-verification-data`
+operation. This has been implemented specifically to support generation of test
+data to be used in the development of new versions/ports of AVS.
 
 ### CLI-options
 ```
@@ -190,11 +216,16 @@ Options:
 
 ### Example Usage
 
-
 In this example we launch the executable from the directory containing the DLLs and presets.
 Take note of the effect of the `--runtime-dir` option on the other option search paths; it defaults to
 the directory that holds `vis_avs.dat` so you will rarely want to omit it.
 
+```console
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot --init
+# optional: xvfb-run winecfg
+```
 
 Before running from the MinGW build tree, copy the support DLLs and test data that
 the Codex harness provides:
@@ -206,7 +237,6 @@ cd build
 ```
 
 ```
-
 # then run your app with that prefix from the MinGW build directory:
 WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data \
   --runtime-dir ./ \
