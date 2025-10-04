@@ -79,21 +79,31 @@ std::wstring Widen(const char *text) {
   return result;
 }
 
-std::wstring FormatClassName(LPCTSTR class_name) {
+std::wstring FormatResourceClassName(ULONG_PTR value) {
+  const WORD atom = LOWORD(value);
+  wchar_t buffer[32];
+  std::swprintf(buffer, std::size(buffer), L"#%u", static_cast<unsigned>(atom));
+  return buffer;
+}
+
+std::wstring FormatClassName(LPCWSTR class_name) {
   if (class_name == nullptr) {
     return L"(null)";
   }
   if (!IS_INTRESOURCE(class_name)) {
-#if defined(UNICODE)
     return std::wstring(class_name);
-#else
-    return Widen(class_name);
-#endif
   }
-  const WORD atom = LOWORD(reinterpret_cast<ULONG_PTR>(class_name));
-  wchar_t buffer[32];
-  std::swprintf(buffer, std::size(buffer), L"#%u", static_cast<unsigned>(atom));
-  return buffer;
+  return FormatResourceClassName(reinterpret_cast<ULONG_PTR>(class_name));
+}
+
+std::wstring FormatClassName(LPCSTR class_name) {
+  if (class_name == nullptr) {
+    return L"(null)";
+  }
+  if (!IS_INTRESOURCE(class_name)) {
+    return Widen(class_name);
+  }
+  return FormatResourceClassName(reinterpret_cast<ULONG_PTR>(class_name));
 }
 
 std::wstring FormatWide(const wchar_t *text) {
@@ -244,15 +254,14 @@ HWND WINAPI Hooked_CreateWindowExA(DWORD dwExStyle, LPCSTR lpClassName,
                                    int Y, int nWidth, int nHeight, HWND hWndParent,
                                    HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam) {
   DebugTraceLog(L"CreateWindowExA class=%s name=%s ex=0x%08X style=0x%08X parent=%s",
-                FormatClassName(reinterpret_cast<LPCTSTR>(lpClassName)).c_str(),
+                FormatClassName(lpClassName).c_str(),
                 Widen(lpWindowName).c_str(), dwExStyle, dwStyle,
                 FormatHwnd(hWndParent).c_str());
   HWND hwnd = g_orig_CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle,
                                      X, Y, nWidth, nHeight, hWndParent, hMenu,
                                      hInstance, lpParam);
   if (hwnd != nullptr) {
-    std::wstring detail = L"class=" +
-                          FormatClassName(reinterpret_cast<LPCTSTR>(lpClassName));
+    std::wstring detail = L"class=" + FormatClassName(lpClassName);
     detail += L" name=";
     detail += Widen(lpWindowName);
     detail += L" parent=";
@@ -793,5 +802,3 @@ bool DebugTraceCaptureOffscreenSurface(std::vector<uint8_t> &out_rgba) {
   }
   return true;
 }
-
-} // namespace
