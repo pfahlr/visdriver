@@ -23,5 +23,11 @@ void DebugTraceResetOffscreenSurface();
 
 bool DebugTraceCaptureOffscreenSurface(std::vector<uint8_t> &out_rgba);
 
+bool DebugTraceConfigureDiagnosticsBuffer(int width, int height);
+void DebugTraceResetDiagnosticsBuffer();
+bool DebugTraceFetchLastFrame(uint64_t &in_out_generation,
+                              std::vector<uint8_t> &out_rgba);
+uint64_t DebugTracePeekDiagnosticsGeneration();
+
 bool DebugTraceIsActive();
 

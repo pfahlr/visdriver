@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+#include "debug_trace.hpp"
+
 namespace {
 
 std::wstring FormatWindowsErrorMessage(DWORD error_code) {
@@ -35,18 +37,24 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   VisHost host;
   host.parent = parent;
 
+  DebugTraceLog(L"load_vis: attempting to load %s", dll_path.c_str());
   host.dll = LoadLibraryW(dll_path.c_str());
   if (host.dll == nullptr) {
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: Failed to load vis DLL '" << dll_path
                << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    DebugTraceLog(L"load_vis: LoadLibraryW failed for %s error=%lu", dll_path.c_str(),
+                  error);
     return host;
   }
+
+  DebugTraceLog(L"load_vis: loaded %s module=%p", dll_path.c_str(), host.dll);
 
   FARPROC proc = GetProcAddress(host.dll, "winampVisGetHeader");
   if (proc == nullptr) {
     std::wcerr << L"ERROR: Symbol 'winampVisGetHeader' not found in '" << dll_path
                << L"'.\n";
+    DebugTraceLog(L"load_vis: winampVisGetHeader missing in %s", dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -57,6 +65,8 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (header == nullptr) {
     std::wcerr << L"ERROR: winampVisGetHeader returned null for '" << dll_path
                << L"'.\n";
+    DebugTraceLog(L"load_vis: winampVisGetHeader returned null for %s",
+                  dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -65,6 +75,7 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (header->getModule == nullptr) {
     std::wcerr << L"ERROR: winampVisHeader::getModule is null in '" << dll_path
                << L"'.\n";
+    DebugTraceLog(L"load_vis: getModule is null for %s", dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -74,6 +85,7 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (module == nullptr) {
     std::wcerr << L"ERROR: Failed to fetch first vis module from '" << dll_path
                << L"'.\n";
+    DebugTraceLog(L"load_vis: getModule returned null for %s", dll_path.c_str());
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -82,10 +94,15 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   host.hdr = header;
   host.mod = module;
 
+  DebugTraceLog(L"load_vis: module acquired header=%p module=%p", host.hdr,
+                host.mod);
+
   return host;
 }
 
 void unload_vis(VisHost &host) {
+  DebugTraceLog(L"unload_vis: module=%p child=%p parent=%p", host.dll, host.child,
+                host.parent);
   if (host.child != nullptr) {
     DestroyWindow(host.child);
     host.child = nullptr;
@@ -98,6 +115,7 @@ void unload_vis(VisHost &host) {
   host.mod = nullptr;
   if (host.dll != nullptr) {
     FreeLibrary(host.dll);
+    DebugTraceLog(L"unload_vis: freed module handle=%p", host.dll);
     host.dll = nullptr;
   }
 }
@@ -105,10 +123,13 @@ void unload_vis(VisHost &host) {
 bool begin_vis(VisHost &host, int width, int height) {
   if (host.mod == nullptr) {
     std::wcerr << L"ERROR: Visualization module handle is null.\n";
+    DebugTraceLog(L"begin_vis: module handle null");
     return false;
   }
 
   HWND const target_window = (host.child != nullptr) ? host.child : host.parent;
+  DebugTraceLog(L"begin_vis: target=%p width=%d height=%d", target_window, width,
+                height);
   host.mod->hwndParent = target_window;
   host.mod->hDllInstance = host.dll;
   host.mod->sRate = 44100;
@@ -124,6 +145,7 @@ bool begin_vis(VisHost &host, int width, int height) {
 
   if (host.mod->Init == nullptr) {
     std::wcerr << L"ERROR: Visualization module is missing Init().\n";
+    DebugTraceLog(L"begin_vis: Init missing for module=%p", host.mod);
     return false;
   }
 
@@ -131,18 +153,22 @@ bool begin_vis(VisHost &host, int width, int height) {
   if (init_result != 0) {
     std::wcerr << L"ERROR: Visualization module Init() returned "
                << init_result << L".\n";
+    DebugTraceLog(L"begin_vis: Init returned %d", init_result);
     return false;
   }
 
+  DebugTraceLog(L"begin_vis: Init success");
   return true;
 }
 
 void end_vis(VisHost &host) {
   if (host.mod != nullptr && host.mod->Quit != nullptr) {
+    DebugTraceLog(L"end_vis: calling Quit on module=%p", host.mod);
     host.mod->Quit(host.mod);
   }
 
   if (host.child != nullptr) {
+    DebugTraceLog(L"end_vis: destroying child window=%p", host.child);
     DestroyWindow(host.child);
     host.child = nullptr;
   }
