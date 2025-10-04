@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+#include "windows_diagnostics.hpp"
+
 namespace {
 
 std::wstring FormatWindowsErrorMessage(DWORD error_code) {
@@ -35,11 +37,14 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   VisHost host;
   host.parent = parent;
 
+  diagnostics::Logf(L"load_vis: loading %ls", dll_path.c_str());
   host.dll = LoadLibraryW(dll_path.c_str());
   if (host.dll == nullptr) {
     const DWORD error = GetLastError();
     std::wcerr << L"ERROR: Failed to load vis DLL '" << dll_path
                << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    diagnostics::Logf(L"load_vis: LoadLibraryW failed (%ls)",
+                      FormatWindowsErrorMessage(error).c_str());
     return host;
   }
 
@@ -47,6 +52,7 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (proc == nullptr) {
     std::wcerr << L"ERROR: Symbol 'winampVisGetHeader' not found in '" << dll_path
                << L"'.\n";
+    diagnostics::Logf(L"load_vis: winampVisGetHeader missing");
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -57,6 +63,7 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (header == nullptr) {
     std::wcerr << L"ERROR: winampVisGetHeader returned null for '" << dll_path
                << L"'.\n";
+    diagnostics::Logf(L"load_vis: header null");
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -65,6 +72,7 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (header->getModule == nullptr) {
     std::wcerr << L"ERROR: winampVisHeader::getModule is null in '" << dll_path
                << L"'.\n";
+    diagnostics::Logf(L"load_vis: getModule null");
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -74,6 +82,7 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   if (module == nullptr) {
     std::wcerr << L"ERROR: Failed to fetch first vis module from '" << dll_path
                << L"'.\n";
+    diagnostics::Logf(L"load_vis: getModule(0) returned null");
     FreeLibrary(host.dll);
     host.dll = nullptr;
     return host;
@@ -81,30 +90,37 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
 
   host.hdr = header;
   host.mod = module;
+  diagnostics::Logf(L"load_vis: success module=%p", host.mod);
 
   return host;
 }
 
 void unload_vis(VisHost &host) {
+  diagnostics::Logf(L"unload_vis: begin");
   if (host.child != nullptr) {
+    diagnostics::Logf(L"unload_vis: destroying child %p", host.child);
     DestroyWindow(host.child);
     host.child = nullptr;
   }
   if (host.parent != nullptr) {
+    diagnostics::Logf(L"unload_vis: destroying parent %p", host.parent);
     DestroyWindow(host.parent);
     host.parent = nullptr;
   }
   host.hdr = nullptr;
   host.mod = nullptr;
   if (host.dll != nullptr) {
+    diagnostics::Logf(L"unload_vis: freeing dll %p", host.dll);
     FreeLibrary(host.dll);
     host.dll = nullptr;
   }
+  diagnostics::Logf(L"unload_vis: done");
 }
 
 bool begin_vis(VisHost &host, int width, int height) {
   if (host.mod == nullptr) {
     std::wcerr << L"ERROR: Visualization module handle is null.\n";
+    diagnostics::Logf(L"begin_vis: module null");
     return false;
   }
 
@@ -124,26 +140,35 @@ bool begin_vis(VisHost &host, int width, int height) {
 
   if (host.mod->Init == nullptr) {
     std::wcerr << L"ERROR: Visualization module is missing Init().\n";
+    diagnostics::Logf(L"begin_vis: Init missing");
     return false;
   }
 
+  diagnostics::Logf(L"begin_vis: calling Init (target=%p)", target_window);
   const int init_result = host.mod->Init(host.mod);
   if (init_result != 0) {
     std::wcerr << L"ERROR: Visualization module Init() returned "
                << init_result << L".\n";
+    diagnostics::Logf(L"begin_vis: Init returned %d", init_result);
     return false;
   }
+
+  diagnostics::Logf(L"begin_vis: Init succeeded");
 
   return true;
 }
 
 void end_vis(VisHost &host) {
+  diagnostics::Logf(L"end_vis: begin");
   if (host.mod != nullptr && host.mod->Quit != nullptr) {
     host.mod->Quit(host.mod);
+    diagnostics::Logf(L"end_vis: Quit called");
   }
 
   if (host.child != nullptr) {
+    diagnostics::Logf(L"end_vis: destroying child %p", host.child);
     DestroyWindow(host.child);
     host.child = nullptr;
   }
+  diagnostics::Logf(L"end_vis: done");
 }

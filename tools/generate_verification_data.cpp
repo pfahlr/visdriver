@@ -43,6 +43,7 @@ typedef struct _DROPFILES {
 #include "sha256.hpp"
 #include "vis_host.hpp"
 #include "wav_reader.hpp"
+#include "windows_diagnostics.hpp"
 
 namespace {
 
@@ -985,6 +986,19 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
 
+  const std::filesystem::path diagnostics_log_path =
+      out_dir_path / L"diagnostics.log";
+  diagnostics::Initialize(diagnostics_log_path.wstring());
+  diagnostics::InstallForCurrentProcess();
+  struct DiagnosticsShutdownGuard {
+    ~DiagnosticsShutdownGuard() { diagnostics::Shutdown(); }
+  } diagnostics_shutdown_guard;
+  diagnostics::Logf(
+      L"Diagnostics initialized (vis='%ls', wav='%ls', size=%dx%d, fps=%d, "
+      L"frames=%d)",
+      options.vis_dll.c_str(), options.wav.c_str(), options.width,
+      options.height, options.fps, options.frames);
+
   const std::filesystem::path per_frame_csv_path =
       hashes_dir_path / L"per_frame.csv";
   const std::filesystem::path rolling_hash_path =
@@ -1000,6 +1014,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
                << FormatWindowsErrorMessage(error) << L"\n";
     return 1;
   }
+  diagnostics::Logf(L"Per-frame hash output: %ls",
+                    per_frame_csv_path.c_str());
 
   std::vector<int16_t> audio_pcm;
   int wav_sample_rate = 0;
@@ -1023,9 +1039,14 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     wav_sample_rate = 44100;
     wav_channels = 2;
     wav_sample_count = static_cast<int64_t>(total_samples);
+    diagnostics::Logf(L"WAV loaded: rate=%d channels=%d samples=%lld",
+                      wav_sample_rate, wav_channels,
+                      static_cast<long long>(wav_sample_count));
   } catch (const std::exception &ex) {
-    std::wcerr << L"ERROR: Failed to load WAV: "
-               << ConvertToWide(std::string(ex.what())) << L"\n";
+    const std::wstring error_message =
+        ConvertToWide(std::string(ex.what()));
+    std::wcerr << L"ERROR: Failed to load WAV: " << error_message << L"\n";
+    diagnostics::Logf(L"Failed to load WAV: %ls", error_message.c_str());
     return 1;
   }
 
@@ -1038,17 +1059,25 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   std::wcout << L"Switched to runtime directory: " << options.runtime_dir
              << L"\n";
+  diagnostics::Logf(L"SetCurrentDirectory -> %ls", options.runtime_dir.c_str());
 
+  diagnostics::Logf(L"Creating hidden parent window (%dx%d)", options.width,
+                    options.height);
   HWND parent_window = CreateHiddenParentWindow(options.width, options.height);
   if (parent_window == nullptr) {
     return 1;
   }
+  diagnostics::RegisterWindowTag(parent_window, L"visdriver.parent");
+  diagnostics::Logf(L"Parent window handle: %p", parent_window);
 
+  diagnostics::Logf(L"Loading vis module from %ls", options.vis_dll.c_str());
   VisHost host = load_vis(options.vis_dll, parent_window);
   if (host.dll == nullptr || host.hdr == nullptr || host.mod == nullptr) {
     unload_vis(host);
     return 1;
   }
+  diagnostics::InstallForModule(host.dll);
+  diagnostics::Logf(L"vis module handle=%p", host.dll);
 
   std::wstring header_description = ConvertAnsiToWide(host.hdr->description);
   if (header_description.empty()) {
@@ -1061,28 +1090,40 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   std::wcout << L"Loaded vis module: " << header_description << L"\n";
   std::wcout << L"  module description: " << module_description << L"\n";
 
+  diagnostics::Logf(L"Creating child container (%dx%d)", options.width,
+                    options.height);
   host.child = CreateChildWindow(parent_window, options.width, options.height);
   if (host.child == nullptr) {
     unload_vis(host);
     return 1;
   }
+  diagnostics::RegisterWindowTag(host.child, L"visdriver.child");
+  diagnostics::Logf(L"Child window handle: %p", host.child);
+
+  diagnostics::SetCaptureBounds(options.width, options.height);
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
+  diagnostics::Logf(L"Calling Init() on vis module");
   if (!begin_vis(host, options.width, options.height)) {
+    diagnostics::Logf(L"begin_vis failed");
     unload_vis(host);
     return 1;
   }
+  diagnostics::Logf(L"Vis module initialized successfully");
 
   if (!options.preset.empty()) {
     if (!std::filesystem::exists(options.preset)) {
       std::wcerr << L"ERROR: Preset file not found: " << options.preset << L"\n";
+      diagnostics::Logf(L"Preset file missing: %ls", options.preset.c_str());
       end_vis(host);
       unload_vis(host);
       return 1;
     }
 
+    diagnostics::Logf(L"Waiting for embedded vis window (5000 ms)");
     if (!WaitForEmbeddedVisWindow(host, 5000)) {
       std::wcerr << L"ERROR: Failed to locate AVS window for preset load (timeout).\n";
+      diagnostics::Logf(L"Embedded vis window not found before timeout.");
       end_vis(host);
       unload_vis(host);
       return 1;
@@ -1091,10 +1132,13 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     HWND preset_window = g_embedded_vis_window;
     if (preset_window == nullptr || !IsWindow(preset_window)) {
       std::wcerr << L"ERROR: Failed to locate AVS window for preset load.\n";
+      diagnostics::Logf(L"Embedded vis window handle invalid.");
       end_vis(host);
       unload_vis(host);
       return 1;
     }
+    diagnostics::RegisterWindowTag(preset_window, L"avs.embedded");
+    diagnostics::Logf(L"Embedded vis window handle=%p", preset_window);
 
     const size_t preset_length = options.preset.size();
     const size_t buffer_size =
@@ -1157,6 +1201,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
 
     std::wcout << L"Loaded preset: " << options.preset << L"\n";
+    diagnostics::Logf(L"Preset delivered to AVS: %ls", options.preset.c_str());
   }
 
   if (host.mod->Render == nullptr) {
@@ -1198,6 +1243,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   Sha256 rolling_hash;
 
+  int frames_rendered = 0;
   for (int frame = 0; frame < options.frames; ++frame) {
     const int samples_per_frame =
         static_cast<int>(std::lround(44100.0 / effective_fps));
@@ -1230,17 +1276,43 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
                << L": start=" << start_sample << L", hop=" << hop << L"\n";
 
+    diagnostics::Logf(L"Frame %d: invoking Render (start=%d hop=%d)", frame,
+                      start_sample, hop);
     const int render_result = host.mod->Render(host.mod);
+    diagnostics::Logf(L"Frame %d: Render returned %d", frame, render_result);
     if (render_result != 0) {
       break;
     }
 
-    if (!capture_child_to_rgba(host.child, options.width, options.height,
-                               frame_rgba)) {
+    bool frame_captured =
+        capture_child_to_rgba(host.child, options.width, options.height,
+                              frame_rgba);
+    if (!frame_captured) {
+      diagnostics::Logf(
+          L"Frame %d: window capture failed (hwnd=%p), attempting fallback",
+          frame, host.child);
+      std::vector<uint8_t> fallback_rgba;
+      uint64_t capture_generation = 0;
+      if (diagnostics::FetchLastFrame(fallback_rgba, capture_generation)) {
+        diagnostics::Logf(L"Frame %d: using diagnostics capture #%llu", frame,
+                          static_cast<unsigned long long>(capture_generation));
+        frame_rgba = std::move(fallback_rgba);
+        frame_captured = true;
+      } else {
+        diagnostics::Logf(L"Frame %d: no diagnostics capture available", frame);
+      }
+    } else {
+      diagnostics::Logf(L"Frame %d: captured via window", frame);
+    }
+
+    if (!frame_captured) {
       std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
       capture_failed = true;
       break;
     }
+    frames_rendered = frame + 1;
+    diagnostics::Logf(L"Frame %d: capture complete (%zu bytes)", frame,
+                      frame_rgba.size());
 
     if (avi_enabled && !avi_failed) {
       if (!avi_opened) {
@@ -1276,6 +1348,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         capture_failed = true;
         break;
       }
+      diagnostics::Logf(L"Frame %d: wrote PNG %ls", frame,
+                        png_path.wstring().c_str());
       png_outputs.push_back(png_path);
       std::wcout << L"Wrote " << png_path << L"\n";
     }
@@ -1284,6 +1358,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (avi_writer.IsOpen()) {
     avi_writer.Close();
   }
+
+  diagnostics::Logf(
+      L"Render loop finished: frames_rendered=%d capture_failed=%d hash_failed=%d avi_failed=%d",
+      frames_rendered, capture_failed ? 1 : 0, hash_failed ? 1 : 0,
+      avi_failed ? 1 : 0);
 
   if (!capture_failed && !hash_failed && !avi_failed) {
     if (!FlushFileBuffers(per_frame_file.get())) {
@@ -1294,9 +1373,13 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
   }
 
+  diagnostics::Logf(L"Stopping visualization module");
   end_vis(host);
+  diagnostics::Logf(L"Visualization module stopped");
 
+  diagnostics::Logf(L"Unloading vis module");
   unload_vis(host);
+  diagnostics::Logf(L"vis module unloaded");
 
   if (!capture_failed && !hash_failed && !avi_failed) {
     const std::array<uint8_t, 32> rolling_digest = rolling_hash.Final();

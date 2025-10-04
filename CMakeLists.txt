@@ -47,6 +47,7 @@ add_executable(visdriver
         tools/spectrum.cpp
         tools/wav_reader.cpp
         tools/vis_host.cpp
+        tools/windows_diagnostics.cpp
         src/thirdparty/argparse/argparse.c
         third_party/kissfft/kiss_fft.c
         third_party/kissfft/kiss_fftr.c
