@@ -5,12 +5,12 @@
 
 * Build with **CMake** and **MinGW**.
 
-* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
+* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine32` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
   Install them with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine
+sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32
 ```
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
@@ -34,6 +34,7 @@ cmake
 ccache
 mingw-w64
 wine
+wine32
 ```
 
 copy the necessary dlls into the directory with the executable 
@@ -63,9 +64,17 @@ Options:
   --hash-mode <mode>    Hashing mode: pixels|rolling (default: pixels)
   --help, -h            Show this help message
 
-
+configure 32 bit wineprefix to run your app
 ```
-wine visdriver.exe generate-verification-data --vis-dll .\vis_avs.dll  --vis-avs-dat .\vis_avs.dat --runtime-dir .\  --wav .\tests\data\test.wav --preset  .\tests\data\phase1\simple.avs --out-dir .\tests\golden\phase1\simple
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot -i            
+winecfg
+```
+then ensure the prefix is set to the environment variable before running 
+```
+cd build
+WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data --vis-dll ./vis_avs.dll  --vis-avs-dat ./vis_avs.dat --runtime-dir ./  --wav ./tests/data/test.wav --preset  ./tests/data/phase1/simple.avs --out-dir ./tests/golden/phase1/simple
 ```
 
 

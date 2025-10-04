@@ -3,4 +3,5 @@ cmake
 ccache
 mingw-w64
 wine
+wine32
 
