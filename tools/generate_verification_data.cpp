@@ -185,6 +185,15 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
   return found;
 }
 
+bool IsRunningUnderWine() {
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (ntdll == nullptr) {
+    return false;
+  }
+  FARPROC wine_get_version = GetProcAddress(ntdll, "wine_get_version");
+  return wine_get_version != nullptr;
+}
+
 struct HandleCloser {
   void operator()(HANDLE handle) const {
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
@@ -1096,8 +1105,12 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
   trace_guard.active = true;
-  DebugTraceInstallHooksForModule(GetModuleHandleW(nullptr),
-                                  L"visdriver host process");
+  if (!IsRunningUnderWine()) {
+    DebugTraceInstallHooksForModule(GetModuleHandleW(nullptr),
+                                    L"visdriver host process");
+  } else {
+    DebugTraceLog(L"Skipping host process debug hooks under Wine");
+  }
   DebugTraceLog(L"Debug trace logging to %s", trace_log_path.c_str());
   DebugTraceLog(L"Render options: %dx%d @ %d FPS for %d frames", options.width,
                 options.height, options.fps, options.frames);
