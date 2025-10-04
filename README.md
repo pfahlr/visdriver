@@ -64,21 +64,19 @@ its page will list artifacts for download near the bottom.
 
 On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
 not available by default. Install the packages that mirror our CI environment
-
-first. Enabling the `i386` architecture is required before the 32-bit Wine
-packages (`wine32:i386`) are visible to `apt`:
-
+first. Enable the `i386` architecture *before* refreshing the package lists so
+that the 32-bit Wine packages become visible to `apt`:
 
 ```console
 sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install -y \
+sudo apt-get install --yes --no-install-recommends \
     build-essential cmake ccache mingw-w64 \
     wine wine64 wine32:i386 winbind xvfb
 ```
 
-If the helper binary `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
-exits with `Exec format error`, the host kernel cannot run 32-bit ELF binaries.
+If `wine --version` or `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
+returns `Exec format error`, the host kernel cannot run 32-bit ELF binaries.
 Wine cannot create a 32-bit prefix in that configuration; use a machine with
 `CONFIG_IA32_EMULATION` enabled or a VM/container that provides 32-bit support.
 
@@ -88,15 +86,14 @@ Before building or running visdriver, create a dedicated 32-bit Wine prefix:
 export WINEARCH=win32
 export WINEPREFIX="$HOME/.wine32"
 wineboot -i
-winecfg&    # optional, requires an X11 server
+# Optional: requires an X11 server
+# winecfg
 ```
 
-> **Heads-up:** Wine requires Linux kernels with the `CONFIG_IA32_EMULATION`
-> option enabled to execute 32-bit binaries. If `wine --version` exits with
-> `Exec format error`, check `/proc/sys/abi/ia32_emulation`. When that file is
-> missing or contains `0`, the host kernel cannot execute 32-bit code and the
-> Wine runtime will not start. In that case use a different kernel or a virtual
-> machine that provides 32-bit compatibility.
+> **Heads-up:** `CONFIG_IA32_EMULATION` must be enabled in the Linux kernel to
+> execute 32-bit binaries. When `wine --version` or `/proc/sys/abi/ia32_emulation`
+> indicates the feature is disabled, switch to a kernel/VM with 32-bit support
+> before continuing.
 
 With the dependencies in place, configure and build using the MinGW toolchain
 file provided by this repository.
@@ -118,38 +115,35 @@ make -C build -j$(nproc) VERBOSE=1
 # How to Run
 
 After the build finishes copy the support DLLs into the build directory and
-initialise a 32-bit Wine prefix:
+export the Wine environment variables used throughout the examples below:
 ```console
 cp for_codex/dll/* build/
 cp -R for_codex/tests build/
-export WINEPREFIX="$HOME/.wine32"
 export WINEARCH=win32
-wineboot --init
+export WINEPREFIX="$HOME/.wine32"
 ```
-
-If you are on a headless machine, run `winecfg` via `xvfb-run winecfg` or skip
-it entirely; it is only required when you want to tweak Wine settings.
-
 
 Before running the executable make sure your Wine installation can launch
 32-bit binaries:
 
 ```console
-WINEPREFIX="$HOME/.wine32" WINEARCH=win32 wine --version
+WINEPREFIX="$HOME/.wine32" wine --version
 ```
 
 If this command fails with `Exec format error` your kernel is missing
 `CONFIG_IA32_EMULATION` support; rerun these steps on a host that can execute
 32-bit ELF binaries.
 
-With a working Wine install, create a fresh 32-bit prefix and configure it once:
+With a working Wine install, initialise the prefix once per machine:
 
 ```console
-export WINEPREFIX="$HOME/.wine32"
-export WINEARCH=win32
 wineboot -i
-winecfg&  # optional tweaks
+# Optional: requires an X11 server
+# winecfg
 ```
+
+If you are on a headless machine, run `winecfg` via `xvfb-run winecfg` or skip
+it entirely; it is only required when you want to tweak Wine settings.
 
 Let **visdriver** tell you what it needs:
 ```console
@@ -221,14 +215,14 @@ Take note of the effect of the `--runtime-dir` option on the other option search
 the directory that holds `vis_avs.dat` so you will rarely want to omit it.
 
 ```console
-export WINEPREFIX="$HOME/.wine32"
-export WINEARCH=win32
-wineboot --init
-# optional: xvfb-run winecfg
+# If the prefix has not been initialised yet:
+WINEPREFIX="$HOME/.wine32" wineboot -i
+# Optional (requires an X11 server):
+# xvfb-run winecfg
 ```
 
-Before running from the MinGW build tree, copy the support DLLs and test data that
-the Codex harness provides:
+Before running from the MinGW build tree, copy the support DLLs and test data
+that the Codex harness provides:
 
 ```console
 cp for_codex/dll/* build/
