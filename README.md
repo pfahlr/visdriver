@@ -59,11 +59,13 @@ its page will list artifacts for download near the bottom.
 
 ## With MinGW/GCC
 
+
 ### Configure & Build
-=======
-Install the cross-compilation toolchain and runtime first.  On Ubuntu 24.04
-the following packages are sufficient to build and smoke-test the binary with
-Wine:
+
+On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
+not available by default. Install the packages that mirror our CI environment
+first
+
 
 ```console
 sudo apt-get update
@@ -71,7 +73,9 @@ sudo apt-get install -y build-essential cmake ccache mingw-w64 wine
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
-file provided by this repository:
+file provided by this repository.
+
+Once the toolchain is present you can configure and build the MinGW target:
 
 ```console
 cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
