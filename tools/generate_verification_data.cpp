@@ -136,9 +136,19 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     const ULONGLONG remaining = timeout - elapsed;
     const DWORD wait_duration =
         static_cast<DWORD>(std::min<ULONGLONG>(remaining, 50));
-    const DWORD wait_result = MsgWaitForMultipleObjects(
-        0, nullptr, FALSE, wait_duration, QS_ALLINPUT);
+    const DWORD wait_result = MsgWaitForMultipleObjectsEx(
+        0, nullptr, wait_duration, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     if (wait_result == WAIT_FAILED) {
+      const DWORD wait_error = GetLastError();
+      if (wait_error == ERROR_INVALID_PARAMETER) {
+        if (wait_duration > 0) {
+          Sleep(wait_duration);
+        } else {
+          Sleep(1);
+        }
+        RequestEmbeddedVisWindow(host);
+        continue;
+      }
       break;
     }
 
