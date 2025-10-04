@@ -57,6 +57,97 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+bool PumpPendingWindowMessages() {
+  MSG msg;
+  while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    if (msg.message == WM_QUIT) {
+      PostQuitMessage(static_cast<int>(msg.wParam));
+      return false;
+    }
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+  return true;
+}
+
+bool RequestEmbeddedVisWindow(const VisHost &host) {
+  HWND command_target = nullptr;
+  if (host.child != nullptr) {
+    command_target = host.child;
+  } else if (host.parent != nullptr) {
+    command_target = host.parent;
+  }
+  if (command_target == nullptr) {
+    return false;
+  }
+
+  DWORD_PTR response = 0;
+  const LRESULT status = SendMessageTimeoutW(
+      command_target, WM_WA_IPC, 0, IPC_GETVISWND, SMTO_NORMAL, 100,
+      reinterpret_cast<PDWORD_PTR>(&response));
+  if (status == 0) {
+    return false;
+  }
+
+  HWND candidate = reinterpret_cast<HWND>(response);
+  if (candidate != nullptr && IsWindow(candidate)) {
+    g_embedded_vis_window = candidate;
+    return true;
+  }
+  return false;
+}
+
+bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
+  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    return true;
+  }
+
+  if (!PumpPendingWindowMessages()) {
+    return false;
+  }
+
+  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    return true;
+  }
+
+  RequestEmbeddedVisWindow(host);
+  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    return true;
+  }
+
+  const ULONGLONG timeout = static_cast<ULONGLONG>(timeout_ms);
+  const ULONGLONG start = GetTickCount64();
+
+  while (true) {
+    if (!PumpPendingWindowMessages()) {
+      return false;
+    }
+
+    HWND current_window = g_embedded_vis_window;
+    if (current_window != nullptr && IsWindow(current_window)) {
+      return true;
+    }
+
+    const ULONGLONG elapsed = GetTickCount64() - start;
+    if (elapsed >= timeout) {
+      break;
+    }
+
+    const ULONGLONG remaining = timeout - elapsed;
+    const DWORD wait_duration =
+        static_cast<DWORD>(std::min<ULONGLONG>(remaining, 50));
+    const DWORD wait_result = MsgWaitForMultipleObjects(
+        0, nullptr, FALSE, wait_duration, QS_ALLINPUT);
+    if (wait_result == WAIT_FAILED) {
+      break;
+    }
+
+    RequestEmbeddedVisWindow(host);
+  }
+
+  return g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window);
+}
+
 struct HandleCloser {
   void operator()(HANDLE handle) const {
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
@@ -980,15 +1071,14 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       return 1;
     }
 
-    HWND preset_window = g_embedded_vis_window;
-    if (preset_window == nullptr || !IsWindow(preset_window)) {
-      HWND const command_target = (host.child != nullptr) ? host.child : host.parent;
-      if (command_target != nullptr) {
-        preset_window = reinterpret_cast<HWND>(
-            SendMessage(command_target, WM_WA_IPC, 0, IPC_GETVISWND));
-      }
+    if (!WaitForEmbeddedVisWindow(host, 5000)) {
+      std::wcerr << L"ERROR: Failed to locate AVS window for preset load (timeout).\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
     }
 
+    HWND preset_window = g_embedded_vis_window;
     if (preset_window == nullptr || !IsWindow(preset_window)) {
       std::wcerr << L"ERROR: Failed to locate AVS window for preset load.\n";
       end_vis(host);
