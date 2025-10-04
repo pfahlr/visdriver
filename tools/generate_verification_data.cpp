@@ -233,7 +233,14 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       ResizeEmbeddedWindow(hwnd);
       break;
 
-    case WM_WA_IPC:
+    case WM_WA_IPC: {
+      const bool from_parent = (hwnd == g_parent_window);
+      const bool from_child = (hwnd == g_child_container_window);
+      const bool from_embedded = (hwnd == g_embedded_vis_window);
+      if (!from_parent && !from_child && !from_embedded) {
+        break;
+      }
+
       switch (lParam) {
         case IPC_GETVERSION:
           return 0x2900;
@@ -277,6 +284,7 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
           return 0;
       }
       break;
+    }
   }
 
   return DefWindowProcW(hwnd, msg, wParam, lParam);

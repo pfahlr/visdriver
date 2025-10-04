@@ -108,8 +108,9 @@ bool begin_vis(VisHost &host, int width, int height) {
     return false;
   }
 
-  HWND const target_window = (host.child != nullptr) ? host.child : host.parent;
-  host.mod->hwndParent = target_window;
+  HWND const module_parent =
+      (host.parent != nullptr) ? host.parent : host.child;
+  host.mod->hwndParent = module_parent;
   host.mod->hDllInstance = host.dll;
   host.mod->sRate = 44100;
   host.mod->nCh = 2;
@@ -117,6 +118,8 @@ bool begin_vis(VisHost &host, int width, int height) {
   host.mod->spectrumNch = 2;
   host.mod->waveformNch = 2;
 
+  HWND const target_window =
+      (host.child != nullptr) ? host.child : module_parent;
   if (target_window != nullptr) {
     SetWindowPos(target_window, nullptr, 0, 0, width, height,
                  SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE);
