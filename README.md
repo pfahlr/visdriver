@@ -64,12 +64,14 @@ its page will list artifacts for download near the bottom.
 
 On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
 not available by default. Install the packages that mirror our CI environment
-first
+first.  Enabling the 32-bit (i386) architecture is required before Wine can
+populate a 32-bit prefix:
 
 
 ```console
+sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install -y build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install -y build-essential cmake ccache mingw-w64 wine64 wine32:i386
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
@@ -127,6 +129,69 @@ should help.  E.g. for MinGW DLLs on Ubuntu 24.04 it would be:
 ```
 
 The locations of these files vary among GNU/Linux distros.
+
+### Prepare a 32-bit Wine prefix
+
+Running `visdriver.exe` under Wine requires a working 32-bit userspace.  On a
+regular Ubuntu kernel that functionality is provided by
+`CONFIG_IA32_EMULATION`; on systems where the kernel has been built without
+that option the following commands will fail with `Exec format error`.  You can
+verify the kernel capability upfront with:
+
+```console
+test -f /proc/sys/abi/ia32 && echo "✅ 32-bit support available" || \
+  echo "❌ missing CONFIG_IA32_EMULATION (no /proc/sys/abi/ia32)"
+```
+
+Once 32-bit execution is available, create and initialize a dedicated prefix:
+
+```console
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot --init
+```
+
+The initialization step spawns some helper processes; in a headless shell it is
+normal to see warnings about missing display drivers.  As long as the command
+completes without `Exec format error` the prefix was created successfully.
+
+Before running `visdriver.exe`, copy the runtime DLLs and test data into the
+build directory:
+
+```console
+cp for_codex/dll/* build/
+cp -R for_codex/tests build/
+```
+
+Now the binary can be exercised inside the 32-bit prefix.  The example below
+invokes the help text which is a useful smoke test for the prefix:
+
+```console
+cd build
+WINEPREFIX="$HOME/.wine32" wine ./visdriver.exe --help
+```
+
+To render verification data supply the complete set of arguments.  The paths
+are relative to the build directory when the example command is executed from
+there:
+
+```console
+WINEPREFIX="$HOME/.wine32" wine ./visdriver.exe generate-verification-data \
+  --runtime-dir   . \
+  --vis-avs-dat   ./vis_avs.dat \
+  --vis-dll       ./vis_avs.dll \
+  --out-dll       ./out_wave.dll \
+  --preset        ./tests/data/phase1/simple.avs \
+  --wav           ./tests/data/test.wav \
+  --out-dir       ./tests/golden/phase1/simple \
+  --width         640 \
+  --height        480 \
+  --frames        10
+```
+
+Adjust the output directory and numeric options as required.  When running in a
+headless shell you can suppress Wine's verbose logging by prefixing the command
+with `WINEDEBUG=-all`.
 
 
 ## `visdriver.exe generate-verification-data` operation

@@ -6,12 +6,14 @@
 * Build with **CMake** and **MinGW**.
 
 * In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine32` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
-  Install them with:
+  Make sure the 32-bit architecture is enabled before installing Wine packages to avoid missing loader errors:
 
 ```bash
+sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine64 wine32:i386
 ```
+* Verify that the kernel exposes `/proc/sys/abi/ia32`.  If the file is missing the kernel was built without `CONFIG_IA32_EMULATION` and 32-bit Wine binaries will fail with `Exec format error`.
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
 ### Build 
