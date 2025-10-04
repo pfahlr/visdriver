@@ -57,6 +57,15 @@ add_executable(visdriver
 # Link libstdc++ and libgcc statically so those DLLs aren't needed at runtime
 target_link_options(visdriver PRIVATE -static-libstdc++ -static-libgcc)
 
+# link Windows system import libs by their short names (no .dll)
+target_link_libraries(visdriver PRIVATE
+  kernel32
+  user32
+  gdi32
+  opengl32   # if you use OpenGL
+  # add others as needed: advapi32, shell32, ws2_32, comdlg32, shlwapi, etc.
+)
+
 # Optional: also try to fully static link (pulls in libwinpthread, etc.)
 # Beware: this can increase size and occasionally cause TLS/WSA quirks.
 # target_link_options(visdriver PRIVATE -static)
