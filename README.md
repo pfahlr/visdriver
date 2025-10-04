@@ -64,12 +64,28 @@ its page will list artifacts for download near the bottom.
 
 On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
 not available by default. Install the packages that mirror our CI environment
-first
+first. Enabling the `i386` architecture is required before the 32-bit Wine
+packages (`wine32:i386`) are visible to `apt`:
 
 
 ```console
+sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install -y build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install -y build-essential cmake ccache mingw-w64 wine wine64 wine32:i386
+```
+
+If the helper binary `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
+exits with `Exec format error`, the host kernel cannot run 32-bit ELF binaries.
+Wine cannot create a 32-bit prefix in that configuration; use a machine with
+`CONFIG_IA32_EMULATION` enabled or a VM/container that provides 32-bit support.
+
+Before building or running visdriver, create a dedicated 32-bit Wine prefix:
+
+```console
+export WINEARCH=win32
+export WINEPREFIX="$HOME/.wine32"
+wineboot -i
+winecfg    # optional, requires an X11 server
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
@@ -159,28 +175,30 @@ Options:
 
 In this example, visdriver.exe was placed in the Program Files (x86)\Winamp installation directory.
 Take note of the effect of the --runtime-dir option on the other options search paths, it's not possible
-to omit this value as it is automatically set to the path where `vis_avs.dat` is located. It's just 
+to omit this value as it is automatically set to the path where `vis_avs.dat` is located. It's just
 a small annoyance.
 
-```
-export WINEPREFIX="$HOME/.wine32"
-export WINEARCH=win32
-wineboot -i            
-winecfg
+Before running from the MinGW build tree, copy the support DLLs and test data that
+the Codex harness provides:
+
+```console
+cp for_codex/dll/* build/
+cp -R for_codex/tests build/
+cd build
 ```
 
 ```
-# then run your app with that prefix:
-WINEPREFIX="$HOME/.wine32 .\visdriver.exe generate-verification-data`
- --runtime-dir .\Plugins\`
- --vis-avs-dat .\vis_avs.dat`
- --vis-dll .\vis_avs.dll`
- --out-dll .\out_wave.dll`
- --preset .\tests\data\phase1\color_mod.avs`
- --wav .\Plugins\tests\data\electronic.wav`
- --out-dir .\tests\out\`
- --avi-out test.avi
- --width 1000 --height 600
+# then run your app with that prefix from the MinGW build directory:
+WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data \
+  --runtime-dir ./ \
+  --vis-avs-dat ./vis_avs.dat \
+  --vis-dll ./vis_avs.dll \
+  --out-dll ./out_wave.dll \
+  --preset ./tests/data/phase1/color_mod.avs \
+  --wav ./tests/data/test.wav \
+  --out-dir ./tests/out/ \
+  --avi-out test.avi \
+  --width 1000 --height 600
 ```
 
 ### CLI Output
