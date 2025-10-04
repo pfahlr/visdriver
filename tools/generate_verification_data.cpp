@@ -57,6 +57,55 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+std::wstring ToLower(const std::wstring &text) {
+  std::wstring lowered = text;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](wchar_t ch) { return std::towlower(ch); });
+  return lowered;
+}
+
+HWND FindEmbeddedVisWindowFallback() {
+  const HWND containers[] = {g_child_container_window, g_parent_window};
+
+  for (HWND container : containers) {
+    if (container == nullptr) {
+      continue;
+    }
+
+    HWND child = FindWindowExW(container, nullptr, nullptr, nullptr);
+    while (child != nullptr) {
+      if (child != g_child_container_window && child != g_parent_window) {
+        wchar_t class_name[256] = L"";
+        const int class_length = GetClassNameW(
+            child, class_name,
+            static_cast<int>(sizeof(class_name) / sizeof(class_name[0])));
+        bool looks_like_avs = false;
+        if (class_length > 0) {
+          std::wstring lower = ToLower(class_name);
+          if (lower.find(L"avs") != std::wstring::npos) {
+            looks_like_avs = true;
+          }
+        }
+
+        if (!looks_like_avs) {
+          const LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
+          if ((style & WS_CHILD) != 0) {
+            looks_like_avs = true;
+          }
+        }
+
+        if (looks_like_avs) {
+          return child;
+        }
+      }
+
+      child = FindWindowExW(container, child, nullptr, nullptr);
+    }
+  }
+
+  return nullptr;
+}
+
 bool PumpPendingWindowMessages() {
   MSG msg;
   while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -145,7 +194,17 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     RequestEmbeddedVisWindow(host);
   }
 
-  return g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window);
+  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    return true;
+  }
+
+  HWND fallback = FindEmbeddedVisWindowFallback();
+  if (fallback != nullptr && IsWindow(fallback)) {
+    g_embedded_vis_window = fallback;
+    return true;
+  }
+
+  return false;
 }
 
 struct HandleCloser {
