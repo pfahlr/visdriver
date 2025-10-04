@@ -8,6 +8,7 @@
 struct ManifestInfo {
   std::filesystem::path out_dir;
   std::filesystem::path vis_dll_path;
+  std::filesystem::path out_dll_path;
   std::filesystem::path runtime_dir;
   std::filesystem::path vis_avs_dat_path;
   std::filesystem::path preset_path;
@@ -23,6 +24,7 @@ struct ManifestInfo {
   std::filesystem::path per_frame_hash_path;
   std::filesystem::path rolling_hash_path;
   std::filesystem::path avi_output_path;
+  bool has_out_dll = false;
   bool has_vis_avs_dat = false;
   bool has_preset = false;
   bool has_avi_output = false;

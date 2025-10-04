@@ -247,6 +247,12 @@ bool WriteManifest(const ManifestInfo &info) {
   writer.BeginObject();
   writer.Key("vis_dll");
   writer.String(PathToUtf8(info.vis_dll_path));
+  writer.Key("out_dll");
+  if (info.has_out_dll) {
+    writer.String(PathToUtf8(info.out_dll_path));
+  } else {
+    writer.Null();
+  }
   writer.Key("runtime_dir");
   writer.String(PathToUtf8(info.runtime_dir));
   writer.Key("vis_avs_dat");
