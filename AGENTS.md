@@ -4,7 +4,14 @@
 ## Setup
 
 * Build with **CMake** and **MinGW**.
-* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine` packages (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
+
+* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
+  Install them with:
+
+```bash
+sudo apt-get update
+sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine
+```
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
 ### Build 
@@ -29,6 +36,11 @@ mingw-w64
 wine
 ```
 
+copy the necessary dlls into the directory with the executable 
+```
+cp for_codex/dll/* build/
+cp -R for_codex/tests build/
+```
 
 ### Run
 
@@ -53,7 +65,7 @@ Options:
 
 
 ```
-wine visdriver.exe generate-verification-data [options]
+wine visdriver.exe generate-verification-data --vis-dll .\vis_avs.dll  --vis-avs-dat .\vis_avs.dat --runtime-dir .\  --wav .\tests\data\test.wav --preset  .\tests\data\phase1\simple.avs --out-dir .\tests\golden\phase1\simple
 ```
 
 
