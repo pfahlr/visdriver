@@ -69,7 +69,7 @@ first
 
 ```console
 sudo apt-get update
-sudo apt-get install -y build-essential cmake ccache mingw-w64 wine
+sudo apt-get install -y build-essential cmake ccache mingw-w64 wine wine32
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
@@ -163,7 +163,15 @@ to omit this value as it is automatically set to the path where `vis_avs.dat` is
 a small annoyance.
 
 ```
-.\visdriver.exe generate-verification-data`
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot -i            
+winecfg
+```
+
+```
+# then run your app with that prefix:
+WINEPREFIX="$HOME/.wine32 .\visdriver.exe generate-verification-data`
  --runtime-dir .\Plugins\`
  --vis-avs-dat .\vis_avs.dat`
  --vis-dll .\vis_avs.dll`
