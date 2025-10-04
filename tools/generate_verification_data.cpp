@@ -1286,6 +1286,20 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   Sha256 rolling_hash;
 
   for (int frame = 0; frame < options.frames; ++frame) {
+    if (!PumpPendingWindowMessages()) {
+      break;
+    }
+
+    const DWORD pump_delay =
+        (host.mod != nullptr && host.mod->delayMs > 0)
+            ? static_cast<DWORD>(host.mod->delayMs)
+            : 0;
+    if (pump_delay > 0) {
+      Sleep(pump_delay);
+    } else {
+      Sleep(0);
+    }
+
     const int samples_per_frame =
         static_cast<int>(std::lround(44100.0 / effective_fps));
     const int hop = std::max(1, samples_per_frame / kWaveformSamples);
@@ -1338,6 +1352,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         capture_failed = true;
         break;
       }
+
     }
 
     if (avi_enabled && !avi_failed) {
