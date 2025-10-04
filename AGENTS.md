@@ -1,108 +1,82 @@
-
 # AGENTS.md
 
 ## Setup
 
 * Build with **CMake** and **MinGW**.
+* Ubuntu/Debian environments must enable multi-arch *before* refreshing the
+  package lists so that 32-bit Wine packages are available:
 
+  ```bash
+  sudo dpkg --add-architecture i386
+  sudo apt-get update
+  sudo apt-get install --yes --no-install-recommends \
+      build-essential cmake ccache mingw-w64 \
+      wine wine64 wine32:i386 winbind xvfb
+  ```
 
-* In Ubuntu environments enable multi-arch and install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, `wine`, `wine64`, and `wine32:i386` packages, matching `.ci/ubuntu-packages.txt`.
-  Enable 32-bit packages before installing Wine:
+  The package list mirrors `.ci/ubuntu-packages.txt`.
 
-  Install them with:
+* If `wine --version` or `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
+  reports `Exec format error`, the host kernel is missing
+  `CONFIG_IA32_EMULATION` and cannot execute 32-bit binaries. Use a kernel or
+  VM that supports 32-bit userspace before attempting to run visdriver.
+* Dependencies are vendored header-only or small C libraries; no additional
+  downloads are required beyond the system packages above.
 
-```bash
-sudo dpkg --add-architecture i386
-sudo apt-get update
-sudo apt-get install --yes \
-    build-essential cmake ccache mingw-w64 \
-    wine wine64 wine32:i386 winbind xvfb
-```
+### Build
 
-* If `wine --version` exits with `Exec format error`, the host kernel does not
-  have `CONFIG_IA32_EMULATION` enabled. Use a kernel/VM that supports 32-bit
-  binaries; Wine cannot run otherwise.
+* Configure via CMake using the MinGW toolchain file and build with GNU make:
 
-  A Linux host must support 32-bit userspace binaries (`CONFIG_IA32_EMULATION` on x86\_64). If `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas --version`
-  exits with `Exec format error`, the kernel cannot execute 32-bit ELF binaries and a 32-bit Wine prefix will not start.
+  ```bash
+  cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -S . -B build
+  make -C build -j"$(nproc)" VERBOSE=1
+  ```
 
-* Dependencies are vendored header-only or tiny C libs (no big external deps).
+  Copy the helper DLLs and test assets next to the resulting executable when
+  running integration tests:
 
-### Build 
-
-see `.github/workflows/linux-mingw.yml` for complete build instructions.
-
-the shorter version is as follows, but the above is the best source of truth:
-
-run 
-```
-cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
-make -C build -j$(nproc) VERBOSE=1
-```
-
-to build in a ubuntu environment with the following packages
-
-```
-build-essential
-cmake
-ccache
-mingw-w64
-wine
-wine64
-wine32:i386
-winbind
-xvfb
-```
-
-copy the necessary dlls into the directory with the executable 
-```
-cp for_codex/dll/* build/
-cp -R for_codex/tests build/
-```
+  ```bash
+  cp for_codex/dll/* build/
+  cp -R for_codex/tests build/
+  ```
 
 ### Run
 
+* Initialise a dedicated 32-bit Wine prefix once per machine:
 
-visdriver.exe generate-verification-data --help
-Options:
-  --vis-dll <path>      Path to vis DLL (required)
-  --runtime-dir <dir>   Runtime directory (default: directory of vis DLL)
-  --vis-avs-dat <path>  Optional path to vis_avs.dat
-  --out-dll <path>      Optional output plug-in DLL
-  --preset <path>       Optional path to preset file
-  --wav <path>          Path to WAV input (required)
-  --width <pixels>      Output width (default: 640)
-  --height <pixels>     Output height (default: 480)
-  --fps <value>         Frames per second (default: 60)
-  --frames <count>      Number of frames to render (default: 121)
-  --out-dir <dir>       Output directory (required)
-  --avi-out <filename>  Optional AVI output filename
-  --png-step <value>    Interval between PNG dumps (default: 1)
-  --hash-mode <mode>    Hashing mode: pixels|rolling (default: pixels)
-  --help, -h            Show this help message
+  ```bash
+  export WINEARCH=win32
+  export WINEPREFIX="$HOME/.wine32"
+  wineboot -i
+  # Optional: DISPLAY must be available for winecfg
+  # winecfg
+  ```
 
-configure 32 bit wineprefix to run your app
-```
-export WINEPREFIX="$HOME/.wine32"
-export WINEARCH=win32
-wineboot --init
-# optional: xvfb-run winecfg
-wine --version
-wineboot -i
-winecfg&
-```
-then ensure the prefix is set to the environment variable before running
-  
-```
-cd build
-WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data --vis-dll ./vis_avs.dll --vis-avs-dat ./vis_avs.dat --runtime-dir ./ --wav ./tests/data/test.wav --preset ./tests/data/phase1/simple.avs --out-dir ./tests/golden/phase1/simple
-```
+* Keep `WINEPREFIX` set whenever running the tools. For example:
 
-If any Wine command reports `Exec format error`, run `uname -a` and verify that the host kernel supports 32-bit execution (look for `CONFIG_IA32_EMULATION=y`). Wine cannot launch 32-bit Windows binaries without that kernel feature; switch to an environment with 32-bit support before retrying.
+  ```bash
+  cd build
+  WINEPREFIX="$HOME/.wine32" wine ./visdriver.exe generate-verification-data \
+      --vis-dll ./vis_avs.dll \
+      --vis-avs-dat ./vis_avs.dat \
+      --runtime-dir ./ \
+      --wav ./tests/data/test.wav \
+      --preset ./tests/data/phase1/simple.avs \
+      --out-dir ./tests/golden/phase1/simple
+  ```
+
+* `visdriver.exe generate-verification-data --help` describes all CLI options.
+  Ensure `--vis-dll` and `--wav` point at valid Windows paths within the Wine
+  prefix or the current directory mapped by Wine.
+
+If any Wine command reports `Exec format error`, confirm the host kernel
+supports 32-bit execution before retrying.
 
 ---
 
-## Misc. Directives 
+## Misc. Directives
 
 * Use wide-char everywhere on Windows paths (`std::wstring`, `CreateFileW`, etc.).
 * Always `CreateDirectoryW` (recursive helper) before writing.
@@ -164,7 +138,7 @@ A new CLI function to produce deterministic goldens from `vis_avs.dll`.
 * `hashes/per_frame.csv` (frame index + sha256 of raw pixels)
 * `hashes/rolling_sha256.txt` (aggregate hash across all frames)
 * `manifest.json` (metadata of inputs/outputs, DLL, WAV, sizes, hashes)
-* optional: `*.avi` (uncompressed 32-bit BI\_RGB)
+* optional: `*.avi` (uncompressed 32-bit BI_RGB)
 
 ---
 
@@ -173,10 +147,10 @@ A new CLI function to produce deterministic goldens from `vis_avs.dll`.
 Codex must work incrementally. Each PR implements **one phase** only.
 
 1. **CLI skeleton**: parse args, print summary.
-2. **vis\_avs.dll load**: load DLL, create parent/child window.
+2. **vis_avs.dll load**: load DLL, create parent/child window.
 3. **WAV reader**: parse/resample 16-bit stereo PCM.
 4. **Dry render loop**: call Init/Render/Quit with zeroed buffers.
-5. **Waveform fill**: 576-sample window mapped to \[0..255].
+5. **Waveform fill**: 576-sample window mapped to [0..255].
 6. **Spectrum fill**: FFT 1024 samples → 576 bins.
 7. **Frame capture**: BitBlt to DIB, write PNGs.
 8. **Hashes**: per-frame + rolling SHA-256.
@@ -192,4 +166,3 @@ Codex must work incrementally. Each PR implements **one phase** only.
 * Subcommand compiles and runs with `--help`.
 * Produces logs/errors instead of crashing.
 * Deterministic outputs (PNG/Hash) identical on repeat runs.
-
