@@ -5,12 +5,13 @@
 
 * Build with **CMake** and **MinGW**.
 
-* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and `wine32` packages same as `.ci/ubuntu-packages.txt` (e.g. `sudo apt-get install -y build-essential cmake ccache mingw-w64 wine`).
+* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and Wine packages same as `.ci/ubuntu-packages.txt`. Enable the 32-bit (`i386`) architecture before installing so that `wine32` packages can be resolved.
   Install them with:
 
 ```bash
+sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32
+sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32:i386
 ```
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
@@ -68,14 +69,17 @@ configure 32 bit wineprefix to run your app
 ```
 export WINEPREFIX="$HOME/.wine32"
 export WINEARCH=win32
-wineboot -i            
+wine --version
+wineboot -i
 winecfg
 ```
-then ensure the prefix is set to the environment variable before running 
+then ensure the prefix is set to the environment variable before running
 ```
 cd build
 WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data --vis-dll ./vis_avs.dll  --vis-avs-dat ./vis_avs.dat --runtime-dir ./  --wav ./tests/data/test.wav --preset  ./tests/data/phase1/simple.avs --out-dir ./tests/golden/phase1/simple
 ```
+
+If any Wine command reports `Exec format error`, run `uname -a` and verify that the host kernel supports 32-bit execution (look for `CONFIG_IA32_EMULATION=y`). Wine cannot launch 32-bit Windows binaries without that kernel feature; switch to an environment with 32-bit support before retrying.
 
 
   
