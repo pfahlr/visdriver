@@ -38,6 +38,7 @@ typedef struct _DROPFILES {
 
 #include "avi_writer.hpp"
 #include "capture.hpp"
+#include "debug_trace.hpp"
 #include "manifest.hpp"
 #include "spectrum.hpp"
 #include "sha256.hpp"
@@ -78,40 +79,56 @@ bool RequestEmbeddedVisWindow(const VisHost &host) {
     command_target = host.parent;
   }
   if (command_target == nullptr) {
+    DebugTraceLog(L"RequestEmbeddedVisWindow: no command target available");
     return false;
   }
 
+  DebugTraceLog(L"RequestEmbeddedVisWindow: sending IPC_GETVISWND to %p",
+                command_target);
   DWORD_PTR response = 0;
   const LRESULT status = SendMessageTimeoutW(
       command_target, WM_WA_IPC, 0, IPC_GETVISWND, SMTO_NORMAL, 100,
       reinterpret_cast<PDWORD_PTR>(&response));
   if (status == 0) {
+    DebugTraceLog(L"RequestEmbeddedVisWindow: SendMessageTimeoutW failed (error=%lu)",
+                  GetLastError());
     return false;
   }
 
   HWND candidate = reinterpret_cast<HWND>(response);
   if (candidate != nullptr && IsWindow(candidate)) {
     g_embedded_vis_window = candidate;
+    DebugTraceLog(L"RequestEmbeddedVisWindow: located embedded window %p",
+                  candidate);
+    DebugTraceRegisterTargetWindow(candidate);
     return true;
   }
+  DebugTraceLog(L"RequestEmbeddedVisWindow: IPC returned %p (invalid)", candidate);
   return false;
 }
 
 bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
   if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    DebugTraceLog(L"WaitForEmbeddedVisWindow: already have window %p",
+                  g_embedded_vis_window);
     return true;
   }
 
   if (!PumpPendingWindowMessages()) {
+    DebugTraceLog(L"WaitForEmbeddedVisWindow: message pump aborted");
     return false;
   }
 
   if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    DebugTraceLog(L"WaitForEmbeddedVisWindow: window %p arrived after pump",
+                  g_embedded_vis_window);
     return true;
   }
 
   RequestEmbeddedVisWindow(host);
   if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    DebugTraceLog(L"WaitForEmbeddedVisWindow: window %p provided by IPC",
+                  g_embedded_vis_window);
     return true;
   }
 
@@ -120,11 +137,14 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
 
   while (true) {
     if (!PumpPendingWindowMessages()) {
+      DebugTraceLog(L"WaitForEmbeddedVisWindow: message pump failed during wait");
       return false;
     }
 
     HWND current_window = g_embedded_vis_window;
     if (current_window != nullptr && IsWindow(current_window)) {
+      DebugTraceLog(L"WaitForEmbeddedVisWindow: window %p discovered during wait",
+                    current_window);
       return true;
     }
 
@@ -149,13 +169,20 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
         RequestEmbeddedVisWindow(host);
         continue;
       }
+      DebugTraceLog(L"WaitForEmbeddedVisWindow: MsgWait failed error=%lu",
+                    wait_error);
       break;
     }
 
     RequestEmbeddedVisWindow(host);
   }
 
-  return g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window);
+  const bool found = g_embedded_vis_window != nullptr &&
+                     IsWindow(g_embedded_vis_window);
+  if (!found) {
+    DebugTraceLog(L"WaitForEmbeddedVisWindow: timeout after %u ms", timeout_ms);
+  }
+  return found;
 }
 
 struct HandleCloser {
@@ -327,15 +354,21 @@ void ResizeEmbeddedWindow(HWND container) {
 }
 
 LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  DebugTraceLog(L"AvsWindowProc hwnd=%p msg=0x%04X wParam=0x%p lParam=0x%p", hwnd,
+                msg, reinterpret_cast<void *>(wParam),
+                reinterpret_cast<void *>(lParam));
   switch (msg) {
     case WM_NCDESTROY:
       if (hwnd == g_child_container_window) {
         g_child_container_window = nullptr;
+        DebugTraceUnregisterTargetWindow(hwnd);
       }
       if (hwnd == g_parent_window) {
         g_parent_window = nullptr;
+        DebugTraceUnregisterTargetWindow(hwnd);
       }
       if (hwnd == g_embedded_vis_window) {
+        DebugTraceUnregisterTargetWindow(hwnd);
         g_embedded_vis_window = nullptr;
       }
       break;
@@ -384,6 +417,10 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
               embed_window(reinterpret_cast<embedWindowState *>(wParam)));
         case IPC_SETVISWND:
           g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
+          DebugTraceLog(L"IPC_SETVISWND received, window=%p", g_embedded_vis_window);
+          if (g_embedded_vis_window != nullptr) {
+            DebugTraceRegisterTargetWindow(g_embedded_vis_window);
+          }
           HWND container = nullptr;
           if (hwnd == g_child_container_window) {
             container = g_child_container_window;
@@ -466,6 +503,7 @@ void fill_waveform(winampVisModule *mod, const int16_t *pcm, int start_sample,
 }
 
 HWND CreateHiddenParentWindow(int width, int height) {
+  DebugTraceLog(L"CreateHiddenParentWindow width=%d height=%d", width, height);
   if (!RegisterWindowClass(kParentWindowClassName, AvsWindowProc)) {
     return nullptr;
   }
@@ -495,10 +533,15 @@ HWND CreateHiddenParentWindow(int width, int height) {
   }
   g_parent_window = hwnd;
   g_embedded_vis_window = nullptr;
+  if (hwnd != nullptr) {
+    DebugTraceRegisterTargetWindow(hwnd);
+  }
   return hwnd;
 }
 
 HWND CreateChildWindow(HWND parent, int width, int height) {
+  DebugTraceLog(L"CreateChildWindow parent=%p width=%d height=%d", parent, width,
+                height);
   if (!RegisterWindowClass(kChildWindowClassName, AvsWindowProc)) {
     return nullptr;
   }
@@ -515,6 +558,9 @@ HWND CreateChildWindow(HWND parent, int width, int height) {
                << FormatWindowsErrorMessage(error) << L"\n";
   }
   g_child_container_window = hwnd;
+  if (hwnd != nullptr) {
+    DebugTraceRegisterTargetWindow(hwnd);
+  }
   return hwnd;
 }
 
@@ -953,14 +999,18 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   };
 
   log_runtime_directory(options.runtime_dir);
+  DebugTraceLog(L"Runtime directory: %s", options.runtime_dir.c_str());
   if (!options.vis_avs_dat.empty()) {
     log_file_snippet(L"vis_avs.dat", options.vis_avs_dat);
+    DebugTraceLog(L"vis_avs.dat path: %s", options.vis_avs_dat.c_str());
   }
   if (!options.preset.empty()) {
     log_file_snippet(L"Preset", options.preset);
+    DebugTraceLog(L"Preset path: %s", options.preset.c_str());
   }
   if (!options.out_dll.empty()) {
     log_output_module(options.out_dll);
+    DebugTraceLog(L"Output plug-in override: %s", options.out_dll.c_str());
   }
 
   std::error_code path_error;
@@ -974,6 +1024,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   const std::filesystem::path frames_dir_path = out_dir_path / L"frames";
   const std::filesystem::path hashes_dir_path = out_dir_path / L"hashes";
+  const std::filesystem::path logs_dir_path = out_dir_path / L"logs";
 
   if (!EnsureDirectoryExists(out_dir_path.wstring())) {
     return 1;
@@ -984,6 +1035,30 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (!EnsureDirectoryExists(hashes_dir_path.wstring())) {
     return 1;
   }
+  if (!EnsureDirectoryExists(logs_dir_path.wstring())) {
+    return 1;
+  }
+
+  const std::filesystem::path trace_log_path =
+      logs_dir_path / L"avs_debug_trace.log";
+  struct DebugTraceGuard {
+    bool active = false;
+    ~DebugTraceGuard() {
+      if (active) {
+        DebugTraceResetOffscreenSurface();
+        DebugTraceShutdown();
+      }
+    }
+  } trace_guard;
+  if (!DebugTraceInitialize(trace_log_path.wstring())) {
+    std::wcerr << L"ERROR: Failed to initialize debug trace log at '"
+               << trace_log_path.wstring() << L"'.\n";
+    return 1;
+  }
+  trace_guard.active = true;
+  DebugTraceLog(L"Debug trace logging to %s", trace_log_path.c_str());
+  DebugTraceLog(L"Render options: %dx%d @ %d FPS for %d frames", options.width,
+                options.height, options.fps, options.frames);
 
   const std::filesystem::path per_frame_csv_path =
       hashes_dir_path / L"per_frame.csv";
@@ -1019,6 +1094,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     const size_t total_samples = audio_pcm.size() / 2;
     std::wcout << L"WAV ok: 44100 Hz, 2 ch, " << total_samples << L" samples\n";
+    DebugTraceLog(L"Loaded WAV '%s' (%zu samples)", options.wav.c_str(),
+                  total_samples);
     g_total_pcm_samples = static_cast<int>(total_samples);
     wav_sample_rate = 44100;
     wav_channels = 2;
@@ -1038,6 +1115,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   std::wcout << L"Switched to runtime directory: " << options.runtime_dir
              << L"\n";
+  DebugTraceLog(L"SetCurrentDirectory to %s", options.runtime_dir.c_str());
 
   HWND parent_window = CreateHiddenParentWindow(options.width, options.height);
   if (parent_window == nullptr) {
@@ -1049,6 +1127,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     unload_vis(host);
     return 1;
   }
+  DebugTraceLog(L"Loaded vis module from %s (module=%p)", options.vis_dll.c_str(),
+                host.dll);
+  DebugTraceInstallHooksForModule(host.dll, options.vis_dll);
 
   std::wstring header_description = ConvertAnsiToWide(host.hdr->description);
   if (header_description.empty()) {
@@ -1066,14 +1147,19 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     unload_vis(host);
     return 1;
   }
+  if (!DebugTraceConfigureOffscreenSurface(options.width, options.height)) {
+    DebugTraceLog(L"WARNING: Offscreen surface setup failed");
+  }
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
   if (!begin_vis(host, options.width, options.height)) {
     unload_vis(host);
     return 1;
   }
+  DebugTraceLog(L"Visualization module initialized successfully");
 
   if (!options.preset.empty()) {
+    DebugTraceLog(L"Loading preset from %s", options.preset.c_str());
     if (!std::filesystem::exists(options.preset)) {
       std::wcerr << L"ERROR: Preset file not found: " << options.preset << L"\n";
       end_vis(host);
@@ -1157,6 +1243,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
 
     std::wcout << L"Loaded preset: " << options.preset << L"\n";
+    DebugTraceLog(L"Preset load delivered via WM_DROPFILES");
   }
 
   if (host.mod->Render == nullptr) {
@@ -1243,21 +1330,29 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
                << L": start=" << start_sample << L", hop=" << hop << L"\n";
+    DebugTraceLog(L"Frame %d: waveform start=%d hop=%d", frame, start_sample, hop);
 
     const int render_result = host.mod->Render(host.mod);
+    DebugTraceLog(L"Frame %d: Render returned %d", frame, render_result);
     if (render_result != 0) {
+      DebugTraceLog(L"Frame %d: Render aborted", frame);
       break;
     }
 
-    if (!PumpPendingWindowMessages()) {
-      break;
-    }
+    bool captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
+    if (captured) {
+      DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
+    } else {
+      DebugTraceLog(L"Frame %d: offscreen capture unavailable, falling back to window DC",
+                    frame);
+      if (!capture_child_to_rgba(host.child, options.width, options.height,
+                                 frame_rgba)) {
+        std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
+        DebugTraceLog(L"Frame %d: window capture failed", frame);
+        capture_failed = true;
+        break;
+      }
 
-    if (!capture_child_to_rgba(host.child, options.width, options.height,
-                               frame_rgba)) {
-      std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
-      capture_failed = true;
-      break;
     }
 
     if (avi_enabled && !avi_failed) {
@@ -1265,12 +1360,15 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         if (!avi_writer.Open(avi_output_path.wstring(), options.width,
                              options.height, effective_fps)) {
           avi_failed = true;
+          DebugTraceLog(L"Frame %d: failed to open AVI output", frame);
           break;
         }
         avi_opened = true;
+        DebugTraceLog(L"Opened AVI output %s", avi_output_path.wstring().c_str());
       }
       if (!avi_writer.WriteFrame(frame_rgba.data(), frame_rgba.size())) {
         avi_failed = true;
+        DebugTraceLog(L"Frame %d: failed to append frame to AVI", frame);
         break;
       }
     }
@@ -1281,6 +1379,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     if (!WriteAllBytes(per_frame_file.get(), csv_line)) {
       std::wcerr << L"ERROR: Failed to write per-frame hash for frame " << frame
                  << L".\n";
+      DebugTraceLog(L"Frame %d: failed to append per-frame hash", frame);
       hash_failed = true;
       break;
     }
@@ -1292,10 +1391,14 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       if (!write_png(png_path.wstring(), options.width, options.height,
                      frame_rgba.data())) {
         capture_failed = true;
+        DebugTraceLog(L"Frame %d: failed to write PNG %s", frame,
+                      png_path.wstring().c_str());
         break;
       }
       png_outputs.push_back(png_path);
       std::wcout << L"Wrote " << png_path << L"\n";
+      DebugTraceLog(L"Frame %d: wrote PNG %s", frame,
+                    png_path.wstring().c_str());
     }
   }
 
@@ -1308,6 +1411,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       const DWORD error = GetLastError();
       std::wcerr << L"ERROR: Failed to flush per-frame hash file: "
                  << FormatWindowsErrorMessage(error) << L"\n";
+      DebugTraceLog(L"Failed to flush per-frame hash file (error=%lu)", error);
       hash_failed = true;
     }
   }
@@ -1315,6 +1419,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   end_vis(host);
 
   unload_vis(host);
+
+  DebugTraceResetOffscreenSurface();
 
   if (!capture_failed && !hash_failed && !avi_failed) {
     const std::array<uint8_t, 32> rolling_digest = rolling_hash.Final();
@@ -1333,11 +1439,14 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     } else {
       if (!WriteAllBytes(rolling_file.get(), rolling_line)) {
         std::wcerr << L"ERROR: Failed to write rolling hash.\n";
+        DebugTraceLog(L"Failed to write rolling hash to %s",
+                      rolling_hash_path.wstring().c_str());
         hash_failed = true;
       } else if (!FlushFileBuffers(rolling_file.get())) {
         const DWORD error = GetLastError();
         std::wcerr << L"ERROR: Failed to flush rolling hash file: "
                    << FormatWindowsErrorMessage(error) << L"\n";
+        DebugTraceLog(L"Failed to flush rolling hash file (error=%lu)", error);
         hash_failed = true;
       }
     }
@@ -1383,5 +1492,6 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
 
+  DebugTraceLog(L"Render completed successfully");
   return 0;
 }
