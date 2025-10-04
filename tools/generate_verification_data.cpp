@@ -234,6 +234,9 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       break;
 
     case WM_WA_IPC:
+      if (hwnd != g_parent_window && hwnd != g_child_container_window) {
+        break;
+      }
       switch (lParam) {
         case IPC_GETVERSION:
           return 0x2900;
@@ -269,11 +272,15 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
               embed_window(reinterpret_cast<embedWindowState *>(wParam)));
         case IPC_SETVISWND:
           g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
-          if (g_child_container_window != nullptr) {
-            ResizeEmbeddedWindow(g_child_container_window);
-          } else if (g_parent_window != nullptr) {
-            ResizeEmbeddedWindow(g_parent_window);
+          HWND container = nullptr;
+          if (hwnd == g_child_container_window) {
+            container = g_child_container_window;
+          } else if (g_child_container_window != nullptr) {
+            container = g_child_container_window;
+          } else {
+            container = g_parent_window;
           }
+          ResizeEmbeddedWindow(container);
           return 0;
       }
       break;
