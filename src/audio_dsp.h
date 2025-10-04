@@ -18,9 +18,19 @@
 #ifndef AUDIO_DSP_H
 #define AUDIO_DSP_H
 
-int __cdecl dsp_isactive();
+#if !defined(AUDIO_DSP_CALLCONV)
+#if defined(_MSC_VER)
+#define AUDIO_DSP_CALLCONV __cdecl
+#elif defined(__MINGW32__) || defined(__MINGW64__) || defined(__GNUC__)
+#define AUDIO_DSP_CALLCONV __attribute__((__cdecl__))
+#else
+#define AUDIO_DSP_CALLCONV
+#endif
+#endif
 
-int __cdecl dsp_dosamples(short int *samples, int numsamples, int bps, int nch,
-                          int srate);
+int AUDIO_DSP_CALLCONV dsp_isactive(void);
+
+int AUDIO_DSP_CALLCONV dsp_dosamples(short int *samples, int numsamples,
+                                     int bps, int nch, int srate);
 
 #endif // ifndef AUDIO_DSP_H
