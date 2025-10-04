@@ -59,6 +59,17 @@ its page will list artifacts for download near the bottom.
 
 ## With MinGW/GCC
 
+### Prerequisites (Ubuntu 24.04)
+
+Install the same packages that the CI uses (listed in `.ci/ubuntu-packages.txt`):
+
+```console
+# sudo apt-get update
+# sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine
+```
+
+### Configure & Build
+
 ```console
 # cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
 # make -C build -j$(nproc) VERBOSE=1

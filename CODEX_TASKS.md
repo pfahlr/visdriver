@@ -230,6 +230,8 @@
 
 ## How to run after each step
 
+* Install the Ubuntu packages listed in `.ci/ubuntu-packages.txt`:
+  `sudo apt-get update && sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine`
 * Build (MSVC):
   `cmake -S . -B build -A x64 && cmake --build build -j`
 * Smoke (with your real files):
