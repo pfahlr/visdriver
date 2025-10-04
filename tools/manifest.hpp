@@ -10,6 +10,7 @@ struct ManifestInfo {
   std::filesystem::path vis_dll_path;
   std::filesystem::path runtime_dir;
   std::filesystem::path vis_avs_dat_path;
+  std::filesystem::path out_dll_path;
   std::filesystem::path preset_path;
   std::filesystem::path wav_path;
   int wav_sample_rate = 0;
@@ -24,6 +25,7 @@ struct ManifestInfo {
   std::filesystem::path rolling_hash_path;
   std::filesystem::path avi_output_path;
   bool has_vis_avs_dat = false;
+  bool has_out_dll = false;
   bool has_preset = false;
   bool has_avi_output = false;
 };
