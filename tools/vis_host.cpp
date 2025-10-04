@@ -34,6 +34,7 @@ std::wstring FormatWindowsErrorMessage(DWORD error_code) {
 VisHost load_vis(const std::wstring &dll_path, HWND parent) {
   VisHost host;
   host.parent = parent;
+  host.vis_window = nullptr;
 
   host.dll = LoadLibraryW(dll_path.c_str());
   if (host.dll == nullptr) {
@@ -90,6 +91,7 @@ void unload_vis(VisHost &host) {
     DestroyWindow(host.child);
     host.child = nullptr;
   }
+  host.vis_window = nullptr;
   if (host.parent != nullptr) {
     DestroyWindow(host.parent);
     host.parent = nullptr;
@@ -107,6 +109,8 @@ bool begin_vis(VisHost &host, int width, int height) {
     std::wcerr << L"ERROR: Visualization module handle is null.\n";
     return false;
   }
+
+  host.vis_window = nullptr;
 
   HWND const target_window = (host.child != nullptr) ? host.child : host.parent;
   host.mod->hwndParent = target_window;
@@ -146,4 +150,5 @@ void end_vis(VisHost &host) {
     DestroyWindow(host.child);
     host.child = nullptr;
   }
+  host.vis_window = nullptr;
 }

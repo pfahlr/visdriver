@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cwchar>
 #include <cwctype>
 #include <exception>
@@ -15,6 +16,7 @@
 #include <string>
 #include <system_error>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <xmmintrin.h>
@@ -29,6 +31,9 @@
 #include "vis_host.hpp"
 #include "wav_reader.hpp"
 
+#include <winamp/out.h>
+#include <winamp/wa_ipc.h>
+
 namespace {
 
 constexpr wchar_t kParentWindowClassName[] = L"visdriver.avs.parent";
@@ -37,6 +42,73 @@ constexpr int kWaveformSamples = 576;
 constexpr int kSpectrumFftSize = 1024;
 
 int g_total_pcm_samples = 0;
+
+constexpr wchar_t kTrackedVisWindowProperty[] = L"visdriver.vis.child";
+
+HWND g_parent_window_handle = nullptr;
+HWND g_child_window_handle = nullptr;
+HWND g_tracked_vis_window = nullptr;
+HWND g_tracked_container_window = nullptr;
+
+void ResizeTrackedVisWindow(HWND container) {
+  if (container == nullptr || g_tracked_vis_window == nullptr) {
+    return;
+  }
+
+  RECT rect{};
+  if (!GetClientRect(container, &rect)) {
+    return;
+  }
+
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  if (width < 0 || height < 0) {
+    return;
+  }
+
+  SetWindowPos(g_tracked_vis_window, nullptr, 0, 0, width, height,
+               SWP_NOACTIVATE | SWP_NOZORDER);
+}
+
+HWND GetPreferredEmbedTarget() {
+  if (g_child_window_handle != nullptr) {
+    return g_child_window_handle;
+  }
+  return g_parent_window_handle;
+}
+
+HWND CALLBACK EmbedVisualizationWindow(embedWindowState *state) {
+  HWND target = GetPreferredEmbedTarget();
+  if (state != nullptr) {
+    state->hwndParent = target;
+  }
+  return target;
+}
+
+void TrackVisWindow(HWND container, HWND vis_window) {
+  if (vis_window != nullptr && container != nullptr) {
+    if (g_tracked_container_window != nullptr &&
+        g_tracked_container_window != container) {
+      RemovePropW(g_tracked_container_window, kTrackedVisWindowProperty);
+    }
+    g_tracked_container_window = container;
+    g_tracked_vis_window = vis_window;
+    SetPropW(container, kTrackedVisWindowProperty,
+             reinterpret_cast<HANDLE>(vis_window));
+    return;
+  }
+
+  if (container != nullptr) {
+    RemovePropW(container, kTrackedVisWindowProperty);
+  } else if (g_tracked_container_window != nullptr) {
+    RemovePropW(g_tracked_container_window, kTrackedVisWindowProperty);
+  }
+
+  g_tracked_container_window = nullptr;
+  g_tracked_vis_window = nullptr;
+}
+
+HWND GetTrackedVisWindowHandle() { return g_tracked_vis_window; }
 
 struct HandleCloser {
   void operator()(HANDLE handle) const {
@@ -48,6 +120,90 @@ struct HandleCloser {
 
 using ScopedHandle =
     std::unique_ptr<std::remove_pointer<HANDLE>::type, HandleCloser>;
+
+struct OutputPlugin {
+  HMODULE handle = nullptr;
+  Out_Module *module = nullptr;
+  bool initialized = false;
+};
+
+struct OutputPluginGuard {
+  OutputPlugin plugin;
+
+  ~OutputPluginGuard() { Reset(); }
+
+  void Reset() {
+    if (plugin.module != nullptr && plugin.initialized &&
+        plugin.module->Quit != nullptr) {
+      plugin.module->Quit();
+    }
+    if (plugin.handle != nullptr) {
+      FreeLibrary(plugin.handle);
+    }
+    plugin.handle = nullptr;
+    plugin.module = nullptr;
+    plugin.initialized = false;
+  }
+
+  void Adopt(OutputPlugin &&loaded) {
+    Reset();
+    plugin = std::move(loaded);
+  }
+
+  bool IsLoaded() const { return plugin.module != nullptr; }
+};
+
+OutputPlugin LoadOutputPlugin(const std::wstring &path, HWND main_window) {
+  OutputPlugin plugin;
+  plugin.handle = LoadLibraryW(path.c_str());
+  if (plugin.handle == nullptr) {
+    const DWORD error = GetLastError();
+    std::wcerr << L"ERROR: Failed to load output plugin '" << path
+               << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    return plugin;
+  }
+
+  auto get_module = reinterpret_cast<Out_Module *(WINAPI *)(void)>(
+      GetProcAddress(plugin.handle, "winampGetOutModule"));
+  if (get_module == nullptr) {
+    std::wcerr << L"ERROR: Symbol 'winampGetOutModule' not found in '" << path
+               << L"'.\n";
+    FreeLibrary(plugin.handle);
+    plugin.handle = nullptr;
+    return plugin;
+  }
+
+  plugin.module = get_module();
+  if (plugin.module == nullptr) {
+    std::wcerr << L"ERROR: winampGetOutModule returned null for '" << path
+               << L"'.\n";
+    FreeLibrary(plugin.handle);
+    plugin.handle = nullptr;
+    return plugin;
+  }
+
+  if (plugin.module->version >= OUT_VER_U) {
+    std::wcerr << L"ERROR: Unicode output plugins are not supported ('" << path
+               << L"').\n";
+    FreeLibrary(plugin.handle);
+    plugin.module = nullptr;
+    plugin.handle = nullptr;
+    return plugin;
+  }
+
+  plugin.module->hDllInstance = plugin.handle;
+  plugin.module->hMainWindow = main_window;
+
+  if (plugin.module->Init != nullptr) {
+    plugin.module->Init();
+    plugin.initialized = true;
+  } else {
+    std::wcerr << L"WARNING: Output plugin '" << path
+               << L"' does not implement Init().\n";
+  }
+
+  return plugin;
+}
 
 bool WriteAllBytes(HANDLE handle, const std::string &text) {
   if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
@@ -90,6 +246,13 @@ std::wstring ConvertToWide(const std::string &text) {
                         result.data(), required);
   }
   return result;
+}
+
+std::wstring ConvertToWide(const char *text) {
+  if (text == nullptr) {
+    return std::wstring();
+  }
+  return ConvertToWide(std::string(text));
 }
 
 std::wstring FormatWindowsErrorMessage(DWORD error_code) {
@@ -169,7 +332,152 @@ std::wstring FormatFrameFilename(int frame_index) {
   return stream.str();
 }
 
-LRESULT CALLBACK DummyWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+void LogPathStatus(const wchar_t *label, const std::wstring &path,
+                   bool expect_directory) {
+  if (label == nullptr) {
+    return;
+  }
+
+  if (path.empty()) {
+    std::wcout << L"  " << label << L": (not set)\n";
+    return;
+  }
+
+  std::error_code absolute_error;
+  const std::filesystem::path absolute =
+      std::filesystem::absolute(path, absolute_error);
+  if (absolute_error) {
+    std::wcout << L"  " << label << L": " << path << L" (resolve error: "
+               << ConvertToWide(absolute_error.message()) << L")\n";
+    return;
+  }
+
+  std::error_code status_error;
+  const std::filesystem::file_status status =
+      std::filesystem::status(absolute, status_error);
+  if (status_error) {
+    std::wcout << L"  " << label << L": " << absolute.wstring()
+               << L" (status error: "
+               << ConvertToWide(status_error.message()) << L")\n";
+    return;
+  }
+
+  const bool exists = std::filesystem::exists(status);
+  std::wcout << L"  " << label << L": " << absolute.wstring();
+  if (!exists) {
+    std::wcout << L" (not found)\n";
+    return;
+  }
+
+  if (expect_directory) {
+    if (!std::filesystem::is_directory(status)) {
+      std::wcout << L" (not a directory)\n";
+      return;
+    }
+    std::wcout << L" (directory)\n";
+    return;
+  }
+
+  if (!std::filesystem::is_regular_file(status)) {
+    std::wcout << L" (not a regular file)\n";
+    return;
+  }
+
+  std::error_code size_error;
+  const std::uintmax_t bytes = std::filesystem::file_size(absolute, size_error);
+  if (size_error) {
+    std::wcout << L" (size error: " << ConvertToWide(size_error.message())
+               << L")\n";
+    return;
+  }
+
+  std::wcout << L" (" << bytes << L" bytes)\n";
+}
+
+void LogOptionStatuses(const Options &options) {
+  std::wcout << L"Resolved inputs:\n";
+  LogPathStatus(L"vis-dll", options.vis_dll, false);
+  LogPathStatus(L"runtime-dir", options.runtime_dir, true);
+  LogPathStatus(L"vis_avs.dat", options.vis_avs_dat, false);
+  LogPathStatus(L"preset", options.preset, false);
+  LogPathStatus(L"out-dll", options.out_dll, false);
+}
+
+LRESULT CALLBACK VisualizationWindowProc(HWND hwnd, UINT msg, WPARAM wParam,
+                                         LPARAM lParam) {
+  switch (msg) {
+  case WM_DESTROY:
+    if (hwnd == g_child_window_handle) {
+      g_child_window_handle = nullptr;
+    }
+    if (hwnd == g_parent_window_handle) {
+      g_parent_window_handle = nullptr;
+    }
+    if (hwnd == g_tracked_container_window) {
+      TrackVisWindow(hwnd, nullptr);
+    }
+    break;
+
+  case WM_SIZE:
+  case WM_SIZING:
+    if (hwnd == g_tracked_container_window && g_tracked_vis_window != nullptr) {
+      ResizeTrackedVisWindow(hwnd);
+    }
+    break;
+
+  case WM_WA_IPC:
+    switch (lParam) {
+    case IPC_GETVERSION:
+      return 0x2900;
+    case IPC_ISPLAYING:
+      return 1;
+    case IPC_GETSKIN:
+      if (wParam != 0) {
+        std::strcpy(reinterpret_cast<char *>(wParam), "/tmp");
+      }
+      return static_cast<LRESULT>(wParam);
+    case IPC_GETINIFILE: {
+      static char ini_path[1024] = "";
+      if (ini_path[0] == '\0') {
+        GetModuleFileNameA(nullptr, ini_path,
+                           static_cast<DWORD>(sizeof(ini_path)));
+        char *const dot_position = std::strrchr(ini_path, '.');
+        if (dot_position == nullptr) {
+          ini_path[0] = '\0';
+        } else {
+          std::strcpy(dot_position, ".ini");
+        }
+      }
+      return reinterpret_cast<LRESULT>(ini_path);
+    }
+    case IPC_GET_EMBEDIF:
+      ShowWindow(hwnd, SW_SHOWNA);
+      if (wParam == 0) {
+        return reinterpret_cast<LRESULT>(&EmbedVisualizationWindow);
+      }
+      return reinterpret_cast<LRESULT>(
+          EmbedVisualizationWindow(reinterpret_cast<embedWindowState *>(
+              wParam)));
+    case IPC_SETVISWND: {
+      HWND vis_window = reinterpret_cast<HWND>(wParam);
+      if (vis_window != nullptr) {
+        SetParent(vis_window, hwnd);
+        ShowWindow(vis_window, SW_SHOWNA);
+        TrackVisWindow(hwnd, vis_window);
+        ResizeTrackedVisWindow(hwnd);
+        std::wcout << L"IPC_SETVISWND -> "
+                   << reinterpret_cast<void *>(vis_window) << L"\n";
+      } else {
+        TrackVisWindow(hwnd, nullptr);
+      }
+      return reinterpret_cast<LRESULT>(vis_window);
+    }
+    default:
+      break;
+    }
+    break;
+  }
+
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
@@ -179,7 +487,7 @@ bool RegisterWindowClass(const wchar_t *class_name) {
   WNDCLASSEXW cls{};
   cls.cbSize = sizeof(cls);
   cls.style = CS_HREDRAW | CS_VREDRAW;
-  cls.lpfnWndProc = DummyWindowProc;
+  cls.lpfnWndProc = VisualizationWindowProc;
   cls.hInstance = instance;
   cls.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
   cls.lpszClassName = class_name;
@@ -265,6 +573,7 @@ HWND CreateHiddenParentWindow(int width, int height) {
     std::wcerr << L"ERROR: Failed to create parent window: "
                << FormatWindowsErrorMessage(error) << L"\n";
   }
+  g_parent_window_handle = hwnd;
   return hwnd;
 }
 
@@ -284,6 +593,7 @@ HWND CreateChildWindow(HWND parent, int width, int height) {
     std::wcerr << L"ERROR: Failed to create child window: "
                << FormatWindowsErrorMessage(error) << L"\n";
   }
+  g_child_window_handle = hwnd;
   return hwnd;
 }
 
@@ -296,6 +606,7 @@ struct Options {
   std::wstring vis_dll;
   std::wstring runtime_dir;
   std::wstring vis_avs_dat;
+  std::wstring out_dll;
   std::wstring preset;
   std::wstring wav;
   int width = 640;
@@ -314,11 +625,12 @@ void PrintUsage(const std::wstring &command_name) {
     const wchar_t *description;
   };
 
-  const std::array<OptionHelp, 14> kOptions = {
+  const std::array<OptionHelp, 15> kOptions = {
       OptionHelp{L"--vis-dll <path>", L"Path to vis DLL (required)"},
       OptionHelp{L"--runtime-dir <dir>",
                  L"Runtime directory (default: directory of vis DLL)"},
       OptionHelp{L"--vis-avs-dat <path>", L"Optional path to vis_avs.dat"},
+      OptionHelp{L"--out-dll <path>", L"Optional output plugin DLL"},
       OptionHelp{L"--preset <path>", L"Optional path to preset file"},
       OptionHelp{L"--wav <path>", L"Path to WAV input (required)"},
       OptionHelp{L"--width <pixels>", L"Output width (default: 640)"},
@@ -388,6 +700,9 @@ void PrintSummary(const Options &options) {
   std::wcout << L"  vis_avs.dat:           "
              << (options.vis_avs_dat.empty() ? L"(not set)" : options.vis_avs_dat)
              << L"\n";
+  std::wcout << L"  Output plugin DLL:     "
+             << (options.out_dll.empty() ? L"(not set)" : options.out_dll)
+             << L"\n";
   std::wcout << L"  Preset:                "
              << (options.preset.empty() ? L"(not set)" : options.preset) << L"\n";
   std::wcout << L"  WAV input:             " << options.wav << L"\n";
@@ -411,6 +726,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       (argc > 0 && argv != nullptr) ? argv[0] : L"generate-verification-data";
 
   Options options;
+  OutputPluginGuard output_plugin_guard;
 
   for (int i = 1; i < argc; ++i) {
     const std::wstring current = argv[i];
@@ -435,6 +751,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         options.runtime_dir = require_value(current);
       } else if (current == L"--vis-avs-dat") {
         options.vis_avs_dat = require_value(current);
+      } else if (current == L"--out-dll") {
+        options.out_dll = require_value(current);
       } else if (current == L"--preset") {
         options.preset = require_value(current);
       } else if (current == L"--wav") {
@@ -519,6 +837,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   PrintSummary(options);
+  LogOptionStatuses(options);
 
   std::error_code path_error;
   const std::filesystem::path out_dir_path =
@@ -599,20 +918,54 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
 
+  if (options.out_dll.empty()) {
+    std::wcout << L"Output plugin DLL not specified; skipping load.\n";
+  } else {
+    OutputPlugin loaded_output =
+        LoadOutputPlugin(options.out_dll, parent_window);
+    if (loaded_output.module == nullptr) {
+      DestroyWindow(parent_window);
+      return 1;
+    }
+    std::wstring description = ConvertToWide(loaded_output.module->description);
+    if (description.empty()) {
+      description = L"(unnamed)";
+    }
+    std::wcout << L"Output plugin loaded: " << description << L" (API 0x"
+               << std::hex << loaded_output.module->version << std::dec << L")\n";
+    output_plugin_guard.Adopt(std::move(loaded_output));
+  }
+
   VisHost host = load_vis(options.vis_dll, parent_window);
   if (host.dll == nullptr || host.hdr == nullptr || host.mod == nullptr) {
+    output_plugin_guard.Reset();
     unload_vis(host);
     return 1;
   }
 
+  std::wstring header_description = ConvertToWide(host.hdr->description);
+  if (header_description.empty()) {
+    header_description = L"(unnamed)";
+  }
+  std::wcout << L"Visualizer DLL loaded: " << header_description << L" (API 0x"
+             << std::hex << host.hdr->version << std::dec << L")\n";
+
+  std::wstring module_description = ConvertToWide(host.mod->description);
+  if (module_description.empty()) {
+    module_description = L"(module 0)";
+  }
+  std::wcout << L"Using visualization module: " << module_description << L"\n";
+
   host.child = CreateChildWindow(parent_window, options.width, options.height);
   if (host.child == nullptr) {
+    output_plugin_guard.Reset();
     unload_vis(host);
     return 1;
   }
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
   if (!begin_vis(host, options.width, options.height)) {
+    output_plugin_guard.Reset();
     unload_vis(host);
     return 1;
   }
@@ -620,11 +973,16 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (host.mod->Render == nullptr) {
     std::wcerr << L"ERROR: Visualization module is missing Render().\n";
     end_vis(host);
+    output_plugin_guard.Reset();
     unload_vis(host);
     return 1;
   }
 
-  std::wcout << L"loaded vis module\n";
+  host.vis_window = GetTrackedVisWindowHandle();
+  if (host.vis_window != nullptr) {
+    std::wcout << L"Visualization window handle: "
+               << reinterpret_cast<void *>(host.vis_window) << L"\n";
+  }
 
 #if defined(_MM_SET_FLUSH_ZERO_MODE) && defined(_MM_SET_DENORMALS_ZERO_MODE)
   _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
@@ -695,7 +1053,19 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       break;
     }
 
-    if (!capture_child_to_rgba(host.child, options.width, options.height,
+    HWND tracked_window = GetTrackedVisWindowHandle();
+    if (tracked_window != nullptr && tracked_window != host.vis_window) {
+      host.vis_window = tracked_window;
+      std::wcout << L"Visualization window updated: "
+                 << reinterpret_cast<void *>(host.vis_window) << L"\n";
+    } else if (tracked_window == nullptr && host.vis_window != nullptr) {
+      host.vis_window = nullptr;
+      std::wcout << L"Visualization window cleared.\n";
+    }
+
+    HWND capture_target = (host.vis_window != nullptr) ? host.vis_window
+                                                       : host.child;
+    if (!capture_child_to_rgba(capture_target, options.width, options.height,
                                frame_rgba)) {
       std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
       capture_failed = true;
@@ -756,6 +1126,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
   end_vis(host);
 
+  output_plugin_guard.Reset();
+
   unload_vis(host);
 
   if (!capture_failed && !hash_failed && !avi_failed) {
@@ -796,6 +1168,10 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   manifest.has_vis_avs_dat = !options.vis_avs_dat.empty();
   if (manifest.has_vis_avs_dat) {
     manifest.vis_avs_dat_path = options.vis_avs_dat;
+  }
+  manifest.has_out_dll = !options.out_dll.empty();
+  if (manifest.has_out_dll) {
+    manifest.out_dll_path = options.out_dll;
   }
   manifest.has_preset = !options.preset.empty();
   if (manifest.has_preset) {

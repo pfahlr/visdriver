@@ -255,6 +255,12 @@ bool WriteManifest(const ManifestInfo &info) {
   } else {
     writer.Null();
   }
+  writer.Key("out_dll");
+  if (info.has_out_dll) {
+    writer.String(PathToUtf8(info.out_dll_path));
+  } else {
+    writer.Null();
+  }
   writer.Key("preset");
   if (info.has_preset) {
     writer.String(PathToUtf8(info.preset_path));

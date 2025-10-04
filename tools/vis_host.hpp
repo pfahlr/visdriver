@@ -12,6 +12,7 @@ struct VisHost {
   winampVisModule *mod = nullptr;
   HWND parent = nullptr;
   HWND child = nullptr;
+  HWND vis_window = nullptr;
 };
 
 VisHost load_vis(const std::wstring &dll_path, HWND parent);
