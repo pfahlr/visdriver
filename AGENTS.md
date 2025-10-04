@@ -5,6 +5,7 @@
 
 * Build with **CMake** and **MinGW**.
 
+
 * In Ubuntu environments enable multi-arch and install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, `wine`, `wine64`, and `wine32:i386` packages, matching `.ci/ubuntu-packages.txt`.
   Install them with:
 
