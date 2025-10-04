@@ -59,9 +59,21 @@ its page will list artifacts for download near the bottom.
 
 ## With MinGW/GCC
 
+Install the cross-compilation toolchain and runtime first.  On Ubuntu 24.04
+the following packages are sufficient to build and smoke-test the binary with
+Wine:
+
 ```console
-# cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
-# make -C build -j$(nproc) VERBOSE=1
+sudo apt-get update
+sudo apt-get install build-essential cmake ccache mingw-w64 wine
+```
+
+With the dependencies in place, configure and build using the MinGW toolchain
+file provided by this repository:
+
+```console
+cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
+make -C build -j$(nproc) VERBOSE=1
 ```
 
 ## With Visual Studio
