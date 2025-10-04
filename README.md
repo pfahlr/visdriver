@@ -110,6 +110,12 @@ should help.  E.g. for MinGW DLLs on Ubuntu 24.04 it would be:
 
 The locations of these files vary among GNU/Linux distros.
 
+If your host distribution does not provide functional 32-bit Wine packages,
+consider running Wine from inside a
+[toolbox](https://github.com/containers/toolbox) container. We maintain a short
+[guide](docs/toolbox-wine-prefix.md) that walks you through preparing an Ubuntu
+25.04 toolbox with a clean 32-bit Wine prefix dedicated to visdriver.
+
 
 # How to Force Fullscreen Visualization into a Window
 
