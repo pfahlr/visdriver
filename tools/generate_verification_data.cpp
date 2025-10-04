@@ -17,6 +17,7 @@
 #include <system_error>
 #include <type_traits>
 #include <vector>
+#include <iterator>
 
 #include <xmmintrin.h>
 
@@ -57,6 +58,9 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+void ResizeEmbeddedWindow(HWND container);
+HWND FindEmbeddedWindowInHierarchy(HWND root);
+
 bool PumpPendingWindowMessages() {
   MSG msg;
   while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -67,6 +71,84 @@ bool PumpPendingWindowMessages() {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
+  return true;
+}
+
+HWND GetContainerWindowFromHost(const VisHost &host) {
+  if (host.child != nullptr && IsWindow(host.child)) {
+    return host.child;
+  }
+  if (host.parent != nullptr && IsWindow(host.parent)) {
+    return host.parent;
+  }
+  return nullptr;
+}
+
+bool IsVisdriverManagedWindow(HWND window) {
+  if (window == nullptr) {
+    return false;
+  }
+
+  if (window == g_parent_window || window == g_child_container_window) {
+    return true;
+  }
+
+  wchar_t class_name[64];
+  const int copied = GetClassNameW(window, class_name,
+                                   static_cast<int>(std::size(class_name)));
+  if (copied <= 0) {
+    return false;
+  }
+
+  if (wcscmp(class_name, kParentWindowClassName) == 0 ||
+      wcscmp(class_name, kChildWindowClassName) == 0) {
+    return true;
+  }
+
+  return false;
+}
+
+HWND FindEmbeddedWindowInHierarchy(HWND root) {
+  if (root == nullptr || !IsWindow(root)) {
+    return nullptr;
+  }
+
+  for (HWND child = GetWindow(root, GW_CHILD); child != nullptr;
+       child = GetWindow(child, GW_HWNDNEXT)) {
+    if (!IsWindow(child)) {
+      continue;
+    }
+
+    if (!IsVisdriverManagedWindow(child)) {
+      return child;
+    }
+
+    HWND descendant = FindEmbeddedWindowInHierarchy(child);
+    if (descendant != nullptr) {
+      return descendant;
+    }
+  }
+
+  return nullptr;
+}
+
+bool UpdateEmbeddedWindowFromHierarchy(const VisHost &host) {
+  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+    return true;
+  }
+
+  HWND container = GetContainerWindowFromHost(host);
+  if (container == nullptr) {
+    return false;
+  }
+
+  HWND found = FindEmbeddedWindowInHierarchy(container);
+  if (found == nullptr) {
+    return false;
+  }
+
+  g_embedded_vis_window = found;
+  ResizeEmbeddedWindow(container);
   return true;
 }
 
@@ -115,6 +197,10 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     return true;
   }
 
+  if (UpdateEmbeddedWindowFromHierarchy(host)) {
+    return true;
+  }
+
   const ULONGLONG timeout = static_cast<ULONGLONG>(timeout_ms);
   const ULONGLONG start = GetTickCount64();
 
@@ -143,6 +229,13 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     }
 
     RequestEmbeddedVisWindow(host);
+    if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+      return true;
+    }
+
+    if (UpdateEmbeddedWindowFromHierarchy(host)) {
+      return true;
+    }
   }
 
   return g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window);
@@ -334,6 +427,26 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     case WM_SIZING:
       ResizeEmbeddedWindow(hwnd);
       break;
+
+    case WM_PARENTNOTIFY: {
+      const UINT event = LOWORD(wParam);
+      if (event == WM_CREATE) {
+        HWND created_child = reinterpret_cast<HWND>(lParam);
+        if (created_child != nullptr &&
+            created_child != g_embedded_vis_window &&
+            !IsVisdriverManagedWindow(created_child)) {
+          g_embedded_vis_window = created_child;
+          ResizeEmbeddedWindow(hwnd);
+        }
+      } else if (event == WM_DESTROY) {
+        HWND destroyed_child = reinterpret_cast<HWND>(lParam);
+        if (destroyed_child != nullptr &&
+            destroyed_child == g_embedded_vis_window) {
+          g_embedded_vis_window = nullptr;
+        }
+      }
+      break;
+    }
 
     case WM_WA_IPC:
       if (hwnd != g_parent_window && hwnd != g_child_container_window) {
