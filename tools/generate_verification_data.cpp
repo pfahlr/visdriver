@@ -282,16 +282,21 @@ std::wstring FormatWindowsErrorMessage(DWORD error_code) {
 bool EnsureDirectoryExists(const std::wstring &path) {
   if (path.empty()) {
     std::wcerr << L"ERROR: Directory path is empty.\n";
+    DebugTraceLog(L"EnsureDirectoryExists failed: empty path");
     return false;
   }
+
+  DebugTraceLog(L"EnsureDirectoryExists request: %s", path.c_str());
 
   const DWORD attributes = GetFileAttributesW(path.c_str());
   if (attributes != INVALID_FILE_ATTRIBUTES) {
     if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      DebugTraceLog(L"EnsureDirectoryExists OK (exists): %s", path.c_str());
       return true;
     }
     std::wcerr << L"ERROR: Path '" << path
                << L"' exists but is not a directory.\n";
+    DebugTraceLog(L"EnsureDirectoryExists failed: not a directory %s", path.c_str());
     return false;
   }
 
@@ -299,6 +304,8 @@ bool EnsureDirectoryExists(const std::wstring &path) {
   if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
     std::wcerr << L"ERROR: GetFileAttributesW failed for '" << path
                << L"': " << FormatWindowsErrorMessage(error) << L"\n";
+    DebugTraceLog(L"EnsureDirectoryExists: GetFileAttributesW failed for %s error=%lu",
+                  path.c_str(), error);
     return false;
   }
 
@@ -311,16 +318,20 @@ bool EnsureDirectoryExists(const std::wstring &path) {
   }
 
   if (CreateDirectoryW(path.c_str(), nullptr)) {
+    DebugTraceLog(L"EnsureDirectoryExists created: %s", path.c_str());
     return true;
   }
 
   const DWORD create_error = GetLastError();
   if (create_error == ERROR_ALREADY_EXISTS) {
+    DebugTraceLog(L"EnsureDirectoryExists OK (already exists): %s", path.c_str());
     return true;
   }
 
   std::wcerr << L"ERROR: Failed to create directory '" << path
              << L"': " << FormatWindowsErrorMessage(create_error) << L"\n";
+  DebugTraceLog(L"EnsureDirectoryExists: CreateDirectory failed for %s error=%lu",
+                path.c_str(), create_error);
   return false;
 }
 
@@ -384,13 +395,16 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
       }
       switch (lParam) {
         case IPC_GETVERSION:
+          DebugTraceLog(L"AvsWindowProc: IPC_GETVERSION -> 0x2900");
           return 0x2900;
         case IPC_ISPLAYING:
+          DebugTraceLog(L"AvsWindowProc: IPC_ISPLAYING -> 1");
           return 1;
         case IPC_GETSKIN:
           if (wParam != 0) {
             std::strcpy(reinterpret_cast<char *>(wParam), "/tmp");
           }
+          DebugTraceLog(L"AvsWindowProc: IPC_GETSKIN -> %p", reinterpret_cast<void *>(wParam));
           return wParam;
         case IPC_GETINIFILE: {
           static char ini_path[1024] = "";
@@ -404,17 +418,23 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
               std::strcpy(dot_position, ".ini");
             }
           }
+          DebugTraceLog(L"AvsWindowProc: IPC_GETINIFILE -> %S", ini_path);
           return reinterpret_cast<LRESULT>(ini_path);
         }
-        case IPC_GET_EMBEDIF:
+        case IPC_GET_EMBEDIF: {
           if (g_parent_window != nullptr) {
             ShowWindow(g_parent_window, SW_SHOW);
           }
           if (wParam == 0) {
+            DebugTraceLog(L"AvsWindowProc: IPC_GET_EMBEDIF -> embed_window callback");
             return reinterpret_cast<LRESULT>(embed_window);
           }
-          return reinterpret_cast<LRESULT>(
-              embed_window(reinterpret_cast<embedWindowState *>(wParam)));
+          auto state = reinterpret_cast<embedWindowState *>(wParam);
+          HWND embed_target = embed_window(state);
+          DebugTraceLog(L"AvsWindowProc: IPC_GET_EMBEDIF state=%p -> %p", state,
+                        embed_target);
+          return reinterpret_cast<LRESULT>(embed_target);
+        }
         case IPC_SETVISWND:
           g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
           DebugTraceLog(L"IPC_SETVISWND received, window=%p", g_embedded_vis_window);
@@ -430,6 +450,7 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             container = g_parent_window;
           }
           ResizeEmbeddedWindow(container);
+          DebugTraceLog(L"AvsWindowProc: IPC_SETVISWND configured window=%p", container);
           return 0;
       }
       break;
@@ -584,6 +605,8 @@ struct Options {
   std::wstring avi_out;
   int png_step = 1;
   HashMode hash_mode = HashMode::kPixels;
+  std::wstring trace_log = L"avs_debug_trace.log";
+  bool diagnostics_fallback_enabled = true;
 };
 
 void PrintUsage(const std::wstring &command_name) {
@@ -592,7 +615,7 @@ void PrintUsage(const std::wstring &command_name) {
     const wchar_t *description;
   };
 
-  const std::array<OptionHelp, 15> kOptions = {
+  const std::array<OptionHelp, 17> kOptions = {
       OptionHelp{L"--vis-dll <path>", L"Path to vis DLL (required)"},
       OptionHelp{L"--runtime-dir <dir>",
                  L"Runtime directory (default: directory of vis DLL)"},
@@ -611,6 +634,10 @@ void PrintUsage(const std::wstring &command_name) {
                  L"Interval between PNG dumps (default: 1)"},
       OptionHelp{L"--hash-mode <mode>",
                  L"Hashing mode: pixels|rolling (default: pixels)"},
+      OptionHelp{L"--trace-log <filename>",
+                 L"Diagnostics log filename (default: avs_debug_trace.log)"},
+      OptionHelp{L"--disable-diagnostics-fallback",
+                 L"Disable diagnostics buffer capture fallback"},
       OptionHelp{L"--help, -h", L"Show this help message"},
   };
 
@@ -683,6 +710,11 @@ void PrintSummary(const Options &options) {
   std::wcout << L"  PNG step:              " << options.png_step << L"\n";
   std::wcout << L"  Hash mode:             "
              << (options.hash_mode == HashMode::kPixels ? L"pixels" : L"rolling")
+             << L"\n";
+  std::wcout << L"  Trace log filename:    " << options.trace_log << L"\n";
+  std::wcout << L"  Diagnostics fallback:  "
+             << (options.diagnostics_fallback_enabled ? L"enabled"
+                                                      : L"disabled")
              << L"\n";
 }
 
@@ -762,6 +794,10 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
           std::wcerr << L"ERROR: Option '--hash-mode' expects 'pixels' or 'rolling'.\n";
           return 1;
         }
+      } else if (current == L"--trace-log") {
+        options.trace_log = require_value(current);
+      } else if (current == L"--disable-diagnostics-fallback") {
+        options.diagnostics_fallback_enabled = false;
       } else {
         std::wcerr << L"ERROR: Unknown option '" << current << L"'.\n";
         return 1;
@@ -1039,12 +1075,16 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
 
-  const std::filesystem::path trace_log_path =
-      logs_dir_path / L"avs_debug_trace.log";
+  std::filesystem::path trace_log_path(options.trace_log);
+  if (!trace_log_path.is_absolute()) {
+    trace_log_path = logs_dir_path / trace_log_path;
+  }
+  trace_log_path = trace_log_path.lexically_normal();
   struct DebugTraceGuard {
     bool active = false;
     ~DebugTraceGuard() {
       if (active) {
+        DebugTraceResetDiagnosticsBuffer();
         DebugTraceResetOffscreenSurface();
         DebugTraceShutdown();
       }
@@ -1056,6 +1096,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     return 1;
   }
   trace_guard.active = true;
+  DebugTraceInstallHooksForModule(GetModuleHandleW(nullptr),
+                                  L"visdriver host process");
   DebugTraceLog(L"Debug trace logging to %s", trace_log_path.c_str());
   DebugTraceLog(L"Render options: %dx%d @ %d FPS for %d frames", options.width,
                 options.height, options.fps, options.frames);
@@ -1149,6 +1191,13 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   if (!DebugTraceConfigureOffscreenSurface(options.width, options.height)) {
     DebugTraceLog(L"WARNING: Offscreen surface setup failed");
+  }
+  if (options.diagnostics_fallback_enabled) {
+    if (!DebugTraceConfigureDiagnosticsBuffer(options.width, options.height)) {
+      DebugTraceLog(L"WARNING: Diagnostics buffer setup failed");
+    }
+  } else {
+    DebugTraceLog(L"Diagnostics fallback disabled by option");
   }
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
@@ -1284,6 +1333,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
   }
   Sha256 rolling_hash;
+  uint64_t diagnostics_generation = 0;
 
   for (int frame = 0; frame < options.frames; ++frame) {
     if (!PumpPendingWindowMessages()) {
@@ -1330,29 +1380,57 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
                << L": start=" << start_sample << L", hop=" << hop << L"\n";
+    DebugTraceLog(L"Frame %d: begin", frame);
     DebugTraceLog(L"Frame %d: waveform start=%d hop=%d", frame, start_sample, hop);
 
     const int render_result = host.mod->Render(host.mod);
     DebugTraceLog(L"Frame %d: Render returned %d", frame, render_result);
     if (render_result != 0) {
       DebugTraceLog(L"Frame %d: Render aborted", frame);
+      DebugTraceLog(L"Frame %d: end (render aborted)", frame);
       break;
     }
 
-    bool captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
-    if (captured) {
-      DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
-    } else {
-      DebugTraceLog(L"Frame %d: offscreen capture unavailable, falling back to window DC",
-                    frame);
+    bool captured = false;
+    if (options.diagnostics_fallback_enabled) {
+      const uint64_t previous_generation = diagnostics_generation;
+      if (DebugTraceFetchLastFrame(diagnostics_generation, frame_rgba)) {
+        DebugTraceLog(L"Frame %d: captured from diagnostics buffer (generation=%llu)",
+                      frame, static_cast<unsigned long long>(diagnostics_generation));
+        captured = true;
+      } else {
+        const uint64_t peek_generation = DebugTracePeekDiagnosticsGeneration();
+        if (peek_generation == 0) {
+          DebugTraceLog(L"Frame %d: diagnostics buffer empty", frame);
+        } else if (peek_generation == previous_generation) {
+          DebugTraceLog(L"Frame %d: diagnostics buffer unchanged (generation=%llu)",
+                        frame, static_cast<unsigned long long>(peek_generation));
+        } else {
+          DebugTraceLog(L"Frame %d: diagnostics buffer stale (prev=%llu current=%llu)",
+                        frame, static_cast<unsigned long long>(previous_generation),
+                        static_cast<unsigned long long>(peek_generation));
+        }
+      }
+    }
+    if (!captured) {
+      captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
+      if (captured) {
+        DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
+      } else {
+        DebugTraceLog(L"Frame %d: offscreen capture unavailable", frame);
+      }
+    }
+    if (!captured) {
+      DebugTraceLog(L"Frame %d: attempting window capture fallback", frame);
       if (!capture_child_to_rgba(host.child, options.width, options.height,
                                  frame_rgba)) {
         std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
         DebugTraceLog(L"Frame %d: window capture failed", frame);
         capture_failed = true;
+        DebugTraceLog(L"Frame %d: end (capture failure)", frame);
         break;
       }
-
+      DebugTraceLog(L"Frame %d: captured from window DC", frame);
     }
 
     if (avi_enabled && !avi_failed) {
@@ -1361,6 +1439,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
                              options.height, effective_fps)) {
           avi_failed = true;
           DebugTraceLog(L"Frame %d: failed to open AVI output", frame);
+          DebugTraceLog(L"Frame %d: end (AVI open failure)", frame);
           break;
         }
         avi_opened = true;
@@ -1369,6 +1448,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       if (!avi_writer.WriteFrame(frame_rgba.data(), frame_rgba.size())) {
         avi_failed = true;
         DebugTraceLog(L"Frame %d: failed to append frame to AVI", frame);
+        DebugTraceLog(L"Frame %d: end (AVI write failure)", frame);
         break;
       }
     }
@@ -1381,6 +1461,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
                  << L".\n";
       DebugTraceLog(L"Frame %d: failed to append per-frame hash", frame);
       hash_failed = true;
+      DebugTraceLog(L"Frame %d: end (hash failure)", frame);
       break;
     }
     rolling_hash.Update(frame_rgba);
@@ -1393,6 +1474,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         capture_failed = true;
         DebugTraceLog(L"Frame %d: failed to write PNG %s", frame,
                       png_path.wstring().c_str());
+        DebugTraceLog(L"Frame %d: end (PNG failure)", frame);
         break;
       }
       png_outputs.push_back(png_path);
@@ -1400,6 +1482,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       DebugTraceLog(L"Frame %d: wrote PNG %s", frame,
                     png_path.wstring().c_str());
     }
+
+    DebugTraceLog(L"Frame %d: end", frame);
   }
 
   if (avi_writer.IsOpen()) {

@@ -91,4 +91,4 @@ else ()
     set(VFW32_LIB vfw32)
 endif ()
 
-target_link_libraries(visdriver PRIVATE ${VFW32_LIB})
+target_link_libraries(visdriver PRIVATE ${VFW32_LIB} opengl32)
