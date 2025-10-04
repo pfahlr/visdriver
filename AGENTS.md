@@ -5,14 +5,18 @@
 
 * Build with **CMake** and **MinGW**.
 
-* In Ubuntu environments install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, and Wine packages same as `.ci/ubuntu-packages.txt`. Enable the 32-bit (`i386`) architecture before installing so that `wine32` packages can be resolved.
+
+* In Ubuntu environments enable multi-arch and install the `build-essential`, `cmake`, `ccache`, `mingw-w64`, `wine`, `wine64`, and `wine32:i386` packages, matching `.ci/ubuntu-packages.txt`.
   Install them with:
 
 ```bash
 sudo dpkg --add-architecture i386
 sudo apt-get update
-sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine32:i386
+sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine64 wine32:i386
+
 ```
+  A Linux host must support 32-bit userspace binaries (`CONFIG_IA32_EMULATION` on x86\_64). If `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas --version`
+  exits with `Exec format error`, the kernel cannot execute 32-bit ELF binaries and a 32-bit Wine prefix will not start.
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
 ### Build 
@@ -35,7 +39,8 @@ cmake
 ccache
 mingw-w64
 wine
-wine32
+wine64
+wine32:i386
 ```
 
 copy the necessary dlls into the directory with the executable 
