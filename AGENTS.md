@@ -3,9 +3,8 @@
 
 ## Setup
 
-* Build with **CMake** and **MSVC (x64)**.
-* Minimum Windows SDK: 10.0.
-* Always prefer `UNICODE` / wide-char APIs for paths.
+* Build with **CMake** and **MinGW**.
+* in ubuntu the packages 'build-essential', 'cmake', 'ccache', 'mingw-w64', and 'wine' are needed.
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
 ### Build 
@@ -33,10 +32,32 @@ wine
 
 ### Run
 
+
+visdriver.exe generate-verification-data --help
+Options:
+  --vis-dll <path>      Path to vis DLL (required)
+  --runtime-dir <dir>   Runtime directory (default: directory of vis DLL)
+  --vis-avs-dat <path>  Optional path to vis_avs.dat
+  --out-dll <path>      Optional output plug-in DLL
+  --preset <path>       Optional path to preset file
+  --wav <path>          Path to WAV input (required)
+  --width <pixels>      Output width (default: 640)
+  --height <pixels>     Output height (default: 480)
+  --fps <value>         Frames per second (default: 60)
+  --frames <count>      Number of frames to render (default: 121)
+  --out-dir <dir>       Output directory (required)
+  --avi-out <filename>  Optional AVI output filename
+  --png-step <value>    Interval between PNG dumps (default: 1)
+  --hash-mode <mode>    Hashing mode: pixels|rolling (default: pixels)
+  --help, -h            Show this help message
+
+
 ```
-wine visdriver.exe <subcommand> [options]
+wine visdriver.exe generate-verification-data [options]
 ```
 
+
+  
 ---
 
 ## Misc. Directives 
