@@ -2,3 +2,5 @@ build-essential
 cmake
 ccache
 mingw-w64
+wine
+

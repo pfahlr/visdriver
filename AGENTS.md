@@ -8,17 +8,33 @@
 * Always prefer `UNICODE` / wide-char APIs for paths.
 * Dependencies are vendored header-only or tiny C libs (no big external deps).
 
-### Build commands
+### Build 
 
-```powershell
-cmake -S . -B build -A x64
-cmake --build build -j
+see `.github/workflows/linux-mingw.yml` for complete build instructions.
+
+the shorter version is as follows, but the above is the best source of truth:
+
+run 
 ```
+cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
+make -C build -j$(nproc) VERBOSE=1
+```
+
+to build in a ubuntu environment with the following packages
+
+```
+build-essential
+cmake
+ccache
+mingw-w64
+wine
+```
+
 
 ### Run
 
-```powershell
-build\bin\visdriver.exe <subcommand> [options]
+```
+wine visdriver.exe <subcommand> [options]
 ```
 
 ---
