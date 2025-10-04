@@ -35,6 +35,11 @@ mingw-w64
 wine
 ```
 
+copy the necessary dlls into the directory with the executable 
+```
+cp for_codex/dll/* build/
+cp -R for_codex/tests build/
+```
 
 ### Run
 
@@ -59,7 +64,7 @@ Options:
 
 
 ```
-wine visdriver.exe generate-verification-data [options]
+wine visdriver.exe generate-verification-data --vis-dll .\vis_avs.dll  --vis-avs-dat .\vis_avs.dat --runtime-dir .\  --wav .\tests\data\test.wav --preset  .\tests\data\phase1\simple.avs --out-dir .\tests\golden\phase1\simple
 ```
 
 
