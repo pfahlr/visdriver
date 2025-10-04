@@ -46,6 +46,13 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+HWND GetContainerWindow() {
+  if (g_child_container_window != nullptr) {
+    return g_child_container_window;
+  }
+  return g_parent_window;
+}
+
 struct HandleCloser {
   void operator()(HANDLE handle) const {
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
@@ -193,11 +200,11 @@ std::wstring FormatFrameFilename(int frame_index) {
 }
 
 static HWND embed_window(embedWindowState *state) {
-  (void)state;
-  if (g_child_container_window != nullptr) {
-    return g_child_container_window;
+  HWND const container = GetContainerWindow();
+  if (state != nullptr) {
+    state->me = container;
   }
-  return g_parent_window;
+  return container;
 }
 
 void ResizeEmbeddedWindow(HWND container) {
@@ -230,7 +237,7 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
     case WM_SIZE:
     case WM_SIZING:
-      ResizeEmbeddedWindow(hwnd);
+      ResizeEmbeddedWindow(GetContainerWindow());
       break;
 
     case WM_WA_IPC:
@@ -258,23 +265,22 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
           }
           return reinterpret_cast<LRESULT>(ini_path);
         }
-        case IPC_GET_EMBEDIF:
-          if (g_parent_window != nullptr) {
-            ShowWindow(g_parent_window, SW_SHOW);
+        case IPC_GET_EMBEDIF: {
+          HWND const container = GetContainerWindow();
+          if (container != nullptr) {
+            ShowWindow(container, SW_SHOW);
           }
           if (wParam == 0) {
             return reinterpret_cast<LRESULT>(embed_window);
           }
           return reinterpret_cast<LRESULT>(
               embed_window(reinterpret_cast<embedWindowState *>(wParam)));
-        case IPC_SETVISWND:
+        }
+        case IPC_SETVISWND: {
           g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
-          if (g_child_container_window != nullptr) {
-            ResizeEmbeddedWindow(g_child_container_window);
-          } else if (g_parent_window != nullptr) {
-            ResizeEmbeddedWindow(g_parent_window);
-          }
+          ResizeEmbeddedWindow(GetContainerWindow());
           return 0;
+        }
       }
       break;
   }
