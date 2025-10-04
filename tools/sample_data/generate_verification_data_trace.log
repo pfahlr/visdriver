@@ -1,0 +1,77 @@
+== Debug trace initialized ==
+Debug trace logging to C:\\visdriver\\logs\\debug-trace.log
+Installed 25 debug hooks for visdriver.exe (module=0x00400000)
+  hook: user32.dll!CreateWindowExW
+  hook: user32.dll!CreateWindowExA
+  hook: user32.dll!DestroyWindow
+  hook: user32.dll!GetDC
+  hook: user32.dll!GetDCEx
+  hook: user32.dll!GetWindowDC
+  hook: user32.dll!ReleaseDC
+  hook: user32.dll!BeginPaint
+  hook: user32.dll!EndPaint
+  hook: gdi32.dll!CreateCompatibleDC
+  hook: gdi32.dll!DeleteDC
+  hook: gdi32.dll!CreateCompatibleBitmap
+  hook: gdi32.dll!CreateDIBSection
+  hook: gdi32.dll!DeleteObject
+  hook: gdi32.dll!SelectObject
+  hook: gdi32.dll!BitBlt
+  hook: gdi32.dll!StretchBlt
+  hook: gdi32.dll!PatBlt
+  hook: gdi32.dll!SwapBuffers
+  hook: gdi32.dll!ChoosePixelFormat
+  hook: gdi32.dll!SetPixelFormat
+  hook: gdi32.dll!DescribePixelFormat
+  hook: opengl32.dll!wglCreateContext
+  hook: opengl32.dll!wglMakeCurrent
+  hook: opengl32.dll!wglDeleteContext
+Render options: 800x600 @ 60 FPS for 180 frames
+Runtime directory: C:\\visdriver\\runtime
+SetCurrentDirectory to C:\\visdriver\\runtime
+Loaded vis module from C:\\visdriver\\vis_avs.dll (module=0x00560000)
+Loaded WAV 'C:\\audio\\fixtures\\demo.wav' (529200 samples)
+CreateWindowExW class=visdriver_parent name=visdriver hidden parent ex=0x00000080 style=0x96000000 parent=null
+CreateWindowExW -> 0002034A
+CreateWindowExW class=visdriver_child name=visdriver avs child ex=0x00000000 style=0x56000000 parent=0002034A
+CreateWindowExW -> 0002034C
+CreateWindowExA class=avs_worker name=AVS Worker ex=0x00000000 style=0x16000000 parent=00000000
+CreateWindowExA -> 0002034E
+GetDC(0002034A) -> 00020352
+GetDC(0002034C) -> 00020353
+GetDCEx(0002034A, hrgn=00000000, flags=0x00000001) -> 00020354
+GetWindowDC(0002034C) -> 00020355
+BeginPaint(0002034C) -> 00020356
+EndPaint(0002034C)
+CreateCompatibleDC(00020352) -> 00020360
+CreateCompatibleBitmap(dc=00020360, 800x600) -> 00020362
+CreateDIBSection(dc=00020360, usage=0) -> 00020366
+SelectObject(dc=00020360, obj=00020362) -> 00020364
+BitBlt(dest=00020360, src=00020353, size=800x600, rop=0x00CC0020)
+StretchBlt(dest=00020353, src=00020360, size=800x600 -> 640x480, rop=0x00CC0020)
+PatBlt(dc=00020360, x=0, y=0, size=800x600, rop=0x00F00021)
+SwapBuffers(00020353)
+ChoosePixelFormat(00020353)
+DescribePixelFormat(dc=00020353, format=32, bytes=56)
+DescribePixelFormat -> 32
+SetPixelFormat(00020353, 32)
+wglCreateContext(00020353)
+wglCreateContext -> 00020400
+wglMakeCurrent(00020353, 00020400)
+Frame 0: begin
+Frame 0: captured from offscreen surface
+Frame 0: end
+Frame 1: begin
+Frame 1: captured from offscreen surface
+Frame 1: end
+Frame 179: begin
+Frame 179: captured from offscreen surface
+Frame 179: end
+wglMakeCurrent(00000000, 00000000)
+wglDeleteContext(00020400)
+ReleaseDC(0002034C, 00020353) -> 1
+DeleteObject(00020362)
+DeleteDC(00020360)
+DestroyWindow(0002034C)
+DestroyWindow(0002034A)
+== Debug trace shutdown ==
