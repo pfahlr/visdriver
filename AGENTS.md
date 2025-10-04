@@ -13,6 +13,7 @@
 sudo dpkg --add-architecture i386
 sudo apt-get update
 sudo apt-get install --yes build-essential cmake ccache mingw-w64 wine wine64 wine32:i386
+
 ```
   A Linux host must support 32-bit userspace binaries (`CONFIG_IA32_EMULATION` on x86\_64). If `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas --version`
   exits with `Exec format error`, the kernel cannot execute 32-bit ELF binaries and a 32-bit Wine prefix will not start.
@@ -73,14 +74,17 @@ configure 32 bit wineprefix to run your app
 ```
 export WINEPREFIX="$HOME/.wine32"
 export WINEARCH=win32
-wineboot -i            
+wine --version
+wineboot -i
 winecfg
 ```
-then ensure the prefix is set to the environment variable before running 
+then ensure the prefix is set to the environment variable before running
 ```
 cd build
 WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data --vis-dll ./vis_avs.dll  --vis-avs-dat ./vis_avs.dat --runtime-dir ./  --wav ./tests/data/test.wav --preset  ./tests/data/phase1/simple.avs --out-dir ./tests/golden/phase1/simple
 ```
+
+If any Wine command reports `Exec format error`, run `uname -a` and verify that the host kernel supports 32-bit execution (look for `CONFIG_IA32_EMULATION=y`). Wine cannot launch 32-bit Windows binaries without that kernel feature; switch to an environment with 32-bit support before retrying.
 
 
   

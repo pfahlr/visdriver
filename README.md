@@ -64,9 +64,9 @@ its page will list artifacts for download near the bottom.
 
 On a fresh Ubuntu 24.04 environment the MinGW toolchain and Wine runtime are
 not available by default. Install the packages that mirror our CI environment
+
 first. Enabling the `i386` architecture is required before the 32-bit Wine
 packages (`wine32:i386`) are visible to `apt`:
-
 
 ```console
 sudo dpkg --add-architecture i386
@@ -85,7 +85,7 @@ Before building or running visdriver, create a dedicated 32-bit Wine prefix:
 export WINEARCH=win32
 export WINEPREFIX="$HOME/.wine32"
 wineboot -i
-winecfg    # optional, requires an X11 server
+winecfg&    # optional, requires an X11 server
 ```
 
 With the dependencies in place, configure and build using the MinGW toolchain
@@ -96,7 +96,6 @@ Once the toolchain is present you can configure and build the MinGW target:
 ```console
 cmake -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -S . -B build
 make -C build -j$(nproc) VERBOSE=1
-
 ```
 
 ## With Visual Studio
@@ -108,9 +107,29 @@ make -C build -j$(nproc) VERBOSE=1
 
 # How to Run
 
+Before running the executable make sure your Wine installation can launch
+32-bit binaries:
+
+```console
+WINEPREFIX="$HOME/.wine32" WINEARCH=win32 wine --version
+```
+
+If this command fails with `Exec format error` your kernel is missing
+`CONFIG_IA32_EMULATION` support; rerun these steps on a host that can execute
+32-bit ELF binaries.
+
+With a working Wine install, create a fresh 32-bit prefix and configure it once:
+
+```console
+export WINEPREFIX="$HOME/.wine32"
+export WINEARCH=win32
+wineboot -i
+winecfg&  # optional tweaks
+```
+
 Let **visdriver** tell you what it needs:
 ```console
-# WINEDEBUG=-all wine ./build/visdriver.exe --help
+WINEDEBUG=-all WINEPREFIX="$HOME/.wine32" wine ./build/visdriver.exe --help
 Usage: visdriver [OPTIONS] --in PATH/IN.dll --out PATH/OUT.dll --vis PATH/VIS.dll [--] [AUDIO_FILE ..]
    or: visdriver --help
    or: visdriver --version
@@ -135,14 +154,12 @@ If you end up with errors about missing DLLs, copying these files in place
 should help.  E.g. for MinGW DLLs on Ubuntu 24.04 it would be:
 
 ```console
-# cp -v \
+cp -v \
     /usr/i686-w64-mingw32/lib/libwinpthread-1.dll \
     /usr/lib/gcc/i686-w64-mingw32/*-posix/libgcc_s_dw2-1.dll \
     /usr/lib/gcc/i686-w64-mingw32/*-posix/libstdc++-6.dll \
-    .
+    ./build/
 ```
-
-The locations of these files vary among GNU/Linux distros.
 
 
 ## `visdriver.exe generate-verification-data` operation
@@ -173,10 +190,11 @@ Options:
 
 ### Example Usage
 
-In this example, visdriver.exe was placed in the Program Files (x86)\Winamp installation directory.
-Take note of the effect of the --runtime-dir option on the other options search paths, it's not possible
-to omit this value as it is automatically set to the path where `vis_avs.dat` is located. It's just
-a small annoyance.
+
+In this example we launch the executable from the directory containing the DLLs and presets.
+Take note of the effect of the `--runtime-dir` option on the other option search paths; it defaults to
+the directory that holds `vis_avs.dat` so you will rarely want to omit it.
+
 
 Before running from the MinGW build tree, copy the support DLLs and test data that
 the Codex harness provides:
@@ -188,6 +206,7 @@ cd build
 ```
 
 ```
+
 # then run your app with that prefix from the MinGW build directory:
 WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data \
   --runtime-dir ./ \
