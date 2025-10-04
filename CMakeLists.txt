@@ -41,6 +41,7 @@ add_executable(visdriver
         src/visualization.c
         tools/avi_writer.cpp
         tools/capture.cpp
+        tools/diagnostics.cpp
         tools/generate_verification_data.cpp
         tools/manifest.cpp
         tools/sha256.cpp

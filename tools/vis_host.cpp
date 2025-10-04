@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+#include "diagnostics.hpp"
+
 namespace {
 
 std::wstring FormatWindowsErrorMessage(DWORD error_code) {
@@ -42,6 +44,8 @@ VisHost load_vis(const std::wstring &dll_path, HWND parent) {
                << L"': " << FormatWindowsErrorMessage(error) << L"\n";
     return host;
   }
+  diagnostics::RegisterModuleLoad(dll_path, host.dll);
+  diagnostics::HookModule(host.dll);
 
   FARPROC proc = GetProcAddress(host.dll, "winampVisGetHeader");
   if (proc == nullptr) {
@@ -127,19 +131,23 @@ bool begin_vis(VisHost &host, int width, int height) {
     return false;
   }
 
+  diagnostics::NoteVisStep("Init() start");
   const int init_result = host.mod->Init(host.mod);
   if (init_result != 0) {
     std::wcerr << L"ERROR: Visualization module Init() returned "
                << init_result << L".\n";
     return false;
   }
+  diagnostics::NoteVisStep("Init() completed");
 
   return true;
 }
 
 void end_vis(VisHost &host) {
   if (host.mod != nullptr && host.mod->Quit != nullptr) {
+    diagnostics::NoteVisStep("Quit() start");
     host.mod->Quit(host.mod);
+    diagnostics::NoteVisStep("Quit() completed");
   }
 
   if (host.child != nullptr) {

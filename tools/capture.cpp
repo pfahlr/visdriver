@@ -1,5 +1,7 @@
 #include "capture.hpp"
 
+#include "diagnostics.hpp"
+
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -80,6 +82,7 @@ void stb_write_to_file(void *context, void *data, int size) {
 
 bool capture_child_to_rgba(HWND child, int width, int height,
                            std::vector<uint8_t> &out_rgba) {
+  diagnostics::ScopedSuppressLogs suppress;
   if (child == nullptr || width <= 0 || height <= 0) {
     std::wcerr << L"ERROR: Invalid parameters for capture_child_to_rgba.\n";
     return false;

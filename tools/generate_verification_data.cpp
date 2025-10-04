@@ -38,6 +38,7 @@ typedef struct _DROPFILES {
 
 #include "avi_writer.hpp"
 #include "capture.hpp"
+#include "diagnostics.hpp"
 #include "manifest.hpp"
 #include "spectrum.hpp"
 #include "sha256.hpp"
@@ -974,6 +975,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   const std::filesystem::path frames_dir_path = out_dir_path / L"frames";
   const std::filesystem::path hashes_dir_path = out_dir_path / L"hashes";
+  const std::filesystem::path diagnostics_dir_path =
+      out_dir_path / L"diagnostics";
 
   if (!EnsureDirectoryExists(out_dir_path.wstring())) {
     return 1;
@@ -983,6 +986,30 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   if (!EnsureDirectoryExists(hashes_dir_path.wstring())) {
     return 1;
+  }
+  if (!EnsureDirectoryExists(diagnostics_dir_path.wstring())) {
+    return 1;
+  }
+
+  struct DiagnosticsCleanup {
+    bool active = false;
+    ~DiagnosticsCleanup() {
+      if (active) {
+        diagnostics::Shutdown();
+      }
+    }
+  };
+
+  const std::filesystem::path diagnostics_log_path =
+      diagnostics_dir_path / L"avs_trace.log";
+  bool diagnostics_active = diagnostics::Initialize(
+      diagnostics_log_path.wstring(), options.width, options.height);
+  DiagnosticsCleanup diagnostics_guard{diagnostics_active};
+  if (!diagnostics_active) {
+    std::wcerr << L"WARNING: Failed to initialize diagnostics log at '"
+               << diagnostics_log_path.wstring() << L"'.\n";
+  } else {
+    diagnostics::HookModule(GetModuleHandleW(nullptr));
   }
 
   const std::filesystem::path per_frame_csv_path =
@@ -1043,6 +1070,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (parent_window == nullptr) {
     return 1;
   }
+  diagnostics::RegisterParentWindow(parent_window);
 
   VisHost host = load_vis(options.vis_dll, parent_window);
   if (host.dll == nullptr || host.hdr == nullptr || host.mod == nullptr) {
@@ -1065,6 +1093,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (host.child == nullptr) {
     unload_vis(host);
     return 1;
+  }
+  diagnostics::RegisterPrimaryWindow(host.child);
+  if (!diagnostics::ActivateFallbackForWindow(host.child, options.width,
+                                              options.height)) {
+    diagnostics::NoteVisStep("Fallback surface activation failed");
   }
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
@@ -1198,6 +1231,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
   Sha256 rolling_hash;
 
+  diagnostics::NoteVisStep("Render loop begin");
   for (int frame = 0; frame < options.frames; ++frame) {
     const int samples_per_frame =
         static_cast<int>(std::lround(44100.0 / effective_fps));
@@ -1230,16 +1264,21 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     std::wcout << L"Frame " << (frame + 1) << L"/" << options.frames
                << L": start=" << start_sample << L", hop=" << hop << L"\n";
 
+    diagnostics::NoteVisStep("Render start", frame);
     const int render_result = host.mod->Render(host.mod);
     if (render_result != 0) {
+      diagnostics::NoteVisStep("Render failed", frame);
       break;
     }
+    diagnostics::NoteVisStep("Render completed", frame);
 
-    if (!capture_child_to_rgba(host.child, options.width, options.height,
-                               frame_rgba)) {
-      std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
-      capture_failed = true;
-      break;
+    if (!diagnostics::CaptureFallbackIfActive(frame_rgba)) {
+      if (!capture_child_to_rgba(host.child, options.width, options.height,
+                                 frame_rgba)) {
+        std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
+        capture_failed = true;
+        break;
+      }
     }
 
     if (avi_enabled && !avi_failed) {
@@ -1280,6 +1319,8 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       std::wcout << L"Wrote " << png_path << L"\n";
     }
   }
+
+  diagnostics::NoteVisStep("Render loop end");
 
   if (avi_writer.IsOpen()) {
     avi_writer.Close();
