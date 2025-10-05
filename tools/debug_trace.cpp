@@ -256,32 +256,78 @@ bool ShouldSnapshotDiagnostics(HDC dc);
 bool SnapshotDiagnosticsFromDc(HDC dc, const wchar_t *reason);
 
 // Forward declarations of original functions.
-decltype(&CreateWindowExW) g_orig_CreateWindowExW = CreateWindowExW;
-decltype(&CreateWindowExA) g_orig_CreateWindowExA = CreateWindowExA;
-decltype(&DestroyWindow) g_orig_DestroyWindow = DestroyWindow;
-decltype(&GetDC) g_orig_GetDC = GetDC;
-decltype(&GetDCEx) g_orig_GetDCEx = GetDCEx;
-decltype(&GetWindowDC) g_orig_GetWindowDC = GetWindowDC;
-decltype(&ReleaseDC) g_orig_ReleaseDC = ReleaseDC;
-decltype(&BeginPaint) g_orig_BeginPaint = BeginPaint;
-decltype(&EndPaint) g_orig_EndPaint = EndPaint;
-decltype(&CreateCompatibleDC) g_orig_CreateCompatibleDC = CreateCompatibleDC;
-decltype(&DeleteDC) g_orig_DeleteDC = DeleteDC;
-decltype(&CreateDIBSection) g_orig_CreateDIBSection = CreateDIBSection;
-decltype(&DeleteObject) g_orig_DeleteObject = DeleteObject;
-decltype(&BitBlt) g_orig_BitBlt = BitBlt;
-decltype(&StretchBlt) g_orig_StretchBlt = StretchBlt;
-decltype(&SwapBuffers) g_orig_SwapBuffers = SwapBuffers;
-decltype(&ChoosePixelFormat) g_orig_ChoosePixelFormat = ChoosePixelFormat;
-decltype(&SetPixelFormat) g_orig_SetPixelFormat = SetPixelFormat;
-decltype(&wglCreateContext) g_orig_wglCreateContext = wglCreateContext;
-decltype(&wglMakeCurrent) g_orig_wglMakeCurrent = wglMakeCurrent;
-decltype(&wglDeleteContext) g_orig_wglDeleteContext = wglDeleteContext;
+// The debug trace hooks patch Import Address Table entries. To avoid
+// accidentally capturing already-hooked thunks when installing hooks for the
+// host module, resolve each target directly from the exporting DLL before any
+// modifications occur.
+template <typename Func>
+Func ResolveOriginalFunction(const wchar_t *module_name, const char *proc_name,
+                             Func fallback) {
+  HMODULE module = GetModuleHandleW(module_name);
+  if (module == nullptr) {
+    module = LoadLibraryW(module_name);
+  }
+  if (module == nullptr) {
+    return fallback;
+  }
+  const FARPROC proc = GetProcAddress(module, proc_name);
+  if (proc == nullptr) {
+    return fallback;
+  }
+  return reinterpret_cast<Func>(proc);
+}
+
+decltype(&CreateWindowExW) g_orig_CreateWindowExW =
+    ResolveOriginalFunction(L"user32.dll", "CreateWindowExW", CreateWindowExW);
+decltype(&CreateWindowExA) g_orig_CreateWindowExA =
+    ResolveOriginalFunction(L"user32.dll", "CreateWindowExA", CreateWindowExA);
+decltype(&DestroyWindow) g_orig_DestroyWindow =
+    ResolveOriginalFunction(L"user32.dll", "DestroyWindow", DestroyWindow);
+decltype(&GetDC) g_orig_GetDC =
+    ResolveOriginalFunction(L"user32.dll", "GetDC", GetDC);
+decltype(&GetDCEx) g_orig_GetDCEx =
+    ResolveOriginalFunction(L"user32.dll", "GetDCEx", GetDCEx);
+decltype(&GetWindowDC) g_orig_GetWindowDC =
+    ResolveOriginalFunction(L"user32.dll", "GetWindowDC", GetWindowDC);
+decltype(&ReleaseDC) g_orig_ReleaseDC =
+    ResolveOriginalFunction(L"user32.dll", "ReleaseDC", ReleaseDC);
+decltype(&BeginPaint) g_orig_BeginPaint =
+    ResolveOriginalFunction(L"user32.dll", "BeginPaint", BeginPaint);
+decltype(&EndPaint) g_orig_EndPaint =
+    ResolveOriginalFunction(L"user32.dll", "EndPaint", EndPaint);
+decltype(&CreateCompatibleDC) g_orig_CreateCompatibleDC =
+    ResolveOriginalFunction(L"gdi32.dll", "CreateCompatibleDC", CreateCompatibleDC);
+decltype(&DeleteDC) g_orig_DeleteDC =
+    ResolveOriginalFunction(L"gdi32.dll", "DeleteDC", DeleteDC);
+decltype(&CreateDIBSection) g_orig_CreateDIBSection = ResolveOriginalFunction(
+    L"gdi32.dll", "CreateDIBSection", CreateDIBSection);
+decltype(&DeleteObject) g_orig_DeleteObject =
+    ResolveOriginalFunction(L"gdi32.dll", "DeleteObject", DeleteObject);
+decltype(&BitBlt) g_orig_BitBlt =
+    ResolveOriginalFunction(L"gdi32.dll", "BitBlt", BitBlt);
+decltype(&StretchBlt) g_orig_StretchBlt =
+    ResolveOriginalFunction(L"gdi32.dll", "StretchBlt", StretchBlt);
+decltype(&SwapBuffers) g_orig_SwapBuffers =
+    ResolveOriginalFunction(L"gdi32.dll", "SwapBuffers", SwapBuffers);
+decltype(&ChoosePixelFormat) g_orig_ChoosePixelFormat = ResolveOriginalFunction(
+    L"gdi32.dll", "ChoosePixelFormat", ChoosePixelFormat);
+decltype(&SetPixelFormat) g_orig_SetPixelFormat = ResolveOriginalFunction(
+    L"gdi32.dll", "SetPixelFormat", SetPixelFormat);
+decltype(&wglCreateContext) g_orig_wglCreateContext = ResolveOriginalFunction(
+    L"opengl32.dll", "wglCreateContext", wglCreateContext);
+decltype(&wglMakeCurrent) g_orig_wglMakeCurrent = ResolveOriginalFunction(
+    L"opengl32.dll", "wglMakeCurrent", wglMakeCurrent);
+decltype(&wglDeleteContext) g_orig_wglDeleteContext = ResolveOriginalFunction(
+    L"opengl32.dll", "wglDeleteContext", wglDeleteContext);
 decltype(&CreateCompatibleBitmap) g_orig_CreateCompatibleBitmap =
-    CreateCompatibleBitmap;
-decltype(&SelectObject) g_orig_SelectObject = SelectObject;
-decltype(&PatBlt) g_orig_PatBlt = PatBlt;
-decltype(&DescribePixelFormat) g_orig_DescribePixelFormat = DescribePixelFormat;
+    ResolveOriginalFunction(L"gdi32.dll", "CreateCompatibleBitmap",
+                            CreateCompatibleBitmap);
+decltype(&SelectObject) g_orig_SelectObject =
+    ResolveOriginalFunction(L"gdi32.dll", "SelectObject", SelectObject);
+decltype(&PatBlt) g_orig_PatBlt =
+    ResolveOriginalFunction(L"gdi32.dll", "PatBlt", PatBlt);
+decltype(&DescribePixelFormat) g_orig_DescribePixelFormat =
+    ResolveOriginalFunction(L"gdi32.dll", "DescribePixelFormat", DescribePixelFormat);
 
 template <typename... Args>
 void Logf(const wchar_t *format, Args... args) {
