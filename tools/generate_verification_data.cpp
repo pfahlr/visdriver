@@ -58,6 +58,47 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+bool HasValidEmbeddedVisWindow() {
+  return g_embedded_vis_window != nullptr &&
+         IsWindow(g_embedded_vis_window) != FALSE;
+}
+
+void StopTrackingEmbeddedVisWindow() {
+  if (g_embedded_vis_window == nullptr) {
+    return;
+  }
+  DebugTraceLog(L"StopTrackingEmbeddedVisWindow: releasing window=%p",
+                g_embedded_vis_window);
+  DebugTraceUnregisterTargetWindow(g_embedded_vis_window);
+  g_embedded_vis_window = nullptr;
+}
+
+void SetTrackedEmbeddedVisWindow(HWND window) {
+  if (window == nullptr) {
+    StopTrackingEmbeddedVisWindow();
+    return;
+  }
+  if (g_embedded_vis_window == window) {
+    return;
+  }
+  if (g_embedded_vis_window != nullptr) {
+    DebugTraceLog(L"SetTrackedEmbeddedVisWindow: replacing %p with %p",
+                  g_embedded_vis_window, window);
+    DebugTraceUnregisterTargetWindow(g_embedded_vis_window);
+  } else {
+    DebugTraceLog(L"SetTrackedEmbeddedVisWindow: tracking %p", window);
+  }
+  g_embedded_vis_window = window;
+  DebugTraceRegisterTargetWindow(g_embedded_vis_window);
+}
+
+HWND GetEmbeddedWindowContainer() {
+  if (g_child_container_window != nullptr) {
+    return g_child_container_window;
+  }
+  return g_parent_window;
+}
+
 bool PumpPendingWindowMessages() {
   MSG msg;
   while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -97,10 +138,9 @@ bool RequestEmbeddedVisWindow(const VisHost &host) {
 
   HWND candidate = reinterpret_cast<HWND>(response);
   if (candidate != nullptr && IsWindow(candidate)) {
-    g_embedded_vis_window = candidate;
     DebugTraceLog(L"RequestEmbeddedVisWindow: located embedded window %p",
                   candidate);
-    DebugTraceRegisterTargetWindow(candidate);
+    SetTrackedEmbeddedVisWindow(candidate);
     return true;
   }
   DebugTraceLog(L"RequestEmbeddedVisWindow: IPC returned %p (invalid)", candidate);
@@ -108,7 +148,7 @@ bool RequestEmbeddedVisWindow(const VisHost &host) {
 }
 
 bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
-  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+  if (HasValidEmbeddedVisWindow()) {
     DebugTraceLog(L"WaitForEmbeddedVisWindow: already have window %p",
                   g_embedded_vis_window);
     return true;
@@ -119,14 +159,14 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
     return false;
   }
 
-  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+  if (HasValidEmbeddedVisWindow()) {
     DebugTraceLog(L"WaitForEmbeddedVisWindow: window %p arrived after pump",
                   g_embedded_vis_window);
     return true;
   }
 
   RequestEmbeddedVisWindow(host);
-  if (g_embedded_vis_window != nullptr && IsWindow(g_embedded_vis_window)) {
+  if (HasValidEmbeddedVisWindow()) {
     DebugTraceLog(L"WaitForEmbeddedVisWindow: window %p provided by IPC",
                   g_embedded_vis_window);
     return true;
@@ -141,10 +181,9 @@ bool WaitForEmbeddedVisWindow(const VisHost &host, DWORD timeout_ms) {
       return false;
     }
 
-    HWND current_window = g_embedded_vis_window;
-    if (current_window != nullptr && IsWindow(current_window)) {
+    if (HasValidEmbeddedVisWindow()) {
       DebugTraceLog(L"WaitForEmbeddedVisWindow: window %p discovered during wait",
-                    current_window);
+                    g_embedded_vis_window);
       return true;
     }
 
@@ -379,8 +418,7 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         DebugTraceUnregisterTargetWindow(hwnd);
       }
       if (hwnd == g_embedded_vis_window) {
-        DebugTraceUnregisterTargetWindow(hwnd);
-        g_embedded_vis_window = nullptr;
+        StopTrackingEmbeddedVisWindow();
       }
       break;
 
@@ -388,6 +426,53 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     case WM_SIZING:
       ResizeEmbeddedWindow(hwnd);
       break;
+
+    case WM_PARENTNOTIFY: {
+      const UINT event = LOWORD(wParam);
+      if (g_embedded_vis_window != nullptr &&
+          !IsWindow(g_embedded_vis_window)) {
+        DebugTraceLog(
+            L"WM_PARENTNOTIFY: dropping stale embedded window handle %p",
+            g_embedded_vis_window);
+        StopTrackingEmbeddedVisWindow();
+      }
+
+      if (event == WM_CREATE) {
+        HWND child = reinterpret_cast<HWND>(lParam);
+        if (child == nullptr) {
+          break;
+        }
+        if (child == g_parent_window || child == g_child_container_window) {
+          break;
+        }
+        if (!IsWindow(child)) {
+          break;
+        }
+
+        if (HasValidEmbeddedVisWindow()) {
+          if (child != g_embedded_vis_window) {
+            DebugTraceLog(
+                L"WM_PARENTNOTIFY: ignoring child %p because embedded window %p "
+                L"is still valid",
+                child, g_embedded_vis_window);
+          }
+          break;
+        }
+
+        DebugTraceLog(
+            L"WM_PARENTNOTIFY: tracking embedded window candidate %p", child);
+        SetTrackedEmbeddedVisWindow(child);
+        ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
+      } else if (event == WM_DESTROY) {
+        HWND child = reinterpret_cast<HWND>(lParam);
+        if (child != nullptr && child == g_embedded_vis_window) {
+          DebugTraceLog(L"WM_PARENTNOTIFY: tracked embedded window %p destroyed",
+                        child);
+          StopTrackingEmbeddedVisWindow();
+        }
+      }
+      break;
+    }
 
     case WM_WA_IPC:
       if (hwnd != g_parent_window && hwnd != g_child_container_window) {
@@ -435,23 +520,19 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         embed_target);
           return reinterpret_cast<LRESULT>(embed_target);
         }
-        case IPC_SETVISWND:
-          g_embedded_vis_window = reinterpret_cast<HWND>(wParam);
-          DebugTraceLog(L"IPC_SETVISWND received, window=%p", g_embedded_vis_window);
-          if (g_embedded_vis_window != nullptr) {
-            DebugTraceRegisterTargetWindow(g_embedded_vis_window);
-          }
-          HWND container = nullptr;
-          if (hwnd == g_child_container_window) {
-            container = g_child_container_window;
-          } else if (g_child_container_window != nullptr) {
-            container = g_child_container_window;
+        case IPC_SETVISWND: {
+          HWND vis_window = reinterpret_cast<HWND>(wParam);
+          DebugTraceLog(L"IPC_SETVISWND received, window=%p", vis_window);
+          if (vis_window == nullptr) {
+            StopTrackingEmbeddedVisWindow();
           } else {
-            container = g_parent_window;
+            SetTrackedEmbeddedVisWindow(vis_window);
           }
+          HWND container = GetEmbeddedWindowContainer();
           ResizeEmbeddedWindow(container);
           DebugTraceLog(L"AvsWindowProc: IPC_SETVISWND configured window=%p", container);
           return 0;
+        }
       }
       break;
   }
@@ -553,7 +634,7 @@ HWND CreateHiddenParentWindow(int width, int height) {
                << FormatWindowsErrorMessage(error) << L"\n";
   }
   g_parent_window = hwnd;
-  g_embedded_vis_window = nullptr;
+  StopTrackingEmbeddedVisWindow();
   if (hwnd != nullptr) {
     DebugTraceRegisterTargetWindow(hwnd);
   }
