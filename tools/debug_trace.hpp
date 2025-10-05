@@ -17,6 +17,10 @@ bool DebugTraceInstallHooksForModule(HMODULE module,
 
 void DebugTraceRegisterTargetWindow(HWND hwnd);
 void DebugTraceUnregisterTargetWindow(HWND hwnd);
+bool DebugTraceActivateDiagnosticsFallback(HWND hwnd);
+void DebugTraceDeactivateDiagnosticsFallback(HWND hwnd);
+bool DebugTraceIsDiagnosticsFallbackActive(HWND hwnd);
+bool DebugTraceWindowRequiresRealDc(HWND hwnd);
 
 bool DebugTraceConfigureOffscreenSurface(int width, int height);
 void DebugTraceResetOffscreenSurface();

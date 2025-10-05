@@ -1192,6 +1192,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   if (!DebugTraceConfigureOffscreenSurface(options.width, options.height)) {
     DebugTraceLog(L"WARNING: Offscreen surface setup failed");
   }
+  bool diagnostics_fallback_active = false;
   if (options.diagnostics_fallback_enabled) {
     if (!DebugTraceConfigureDiagnosticsBuffer(options.width, options.height)) {
       DebugTraceLog(L"WARNING: Diagnostics buffer setup failed");
@@ -1300,6 +1301,19 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     end_vis(host);
     unload_vis(host);
     return 1;
+  }
+
+  if (options.diagnostics_fallback_enabled) {
+    diagnostics_fallback_active =
+        DebugTraceActivateDiagnosticsFallback(host.child);
+    if (!diagnostics_fallback_active &&
+        DebugTraceWindowRequiresRealDc(host.child)) {
+      std::wcout << L"Diagnostics fallback unavailable: visualization module "
+                    L"requires a real window DC.\n";
+      DebugTraceLog(
+          L"Diagnostics fallback unavailable: visualization module requires a "
+          L"real window DC");
+    }
   }
 
 #if defined(_MM_SET_FLUSH_ZERO_MODE) && defined(_MM_SET_DENORMALS_ZERO_MODE)
