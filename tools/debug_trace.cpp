@@ -256,32 +256,83 @@ bool ShouldSnapshotDiagnostics(HDC dc);
 bool SnapshotDiagnosticsFromDc(HDC dc, const wchar_t *reason);
 
 // Forward declarations of original functions.
-decltype(&CreateWindowExW) g_orig_CreateWindowExW = CreateWindowExW;
-decltype(&CreateWindowExA) g_orig_CreateWindowExA = CreateWindowExA;
-decltype(&DestroyWindow) g_orig_DestroyWindow = DestroyWindow;
-decltype(&GetDC) g_orig_GetDC = GetDC;
-decltype(&GetDCEx) g_orig_GetDCEx = GetDCEx;
-decltype(&GetWindowDC) g_orig_GetWindowDC = GetWindowDC;
-decltype(&ReleaseDC) g_orig_ReleaseDC = ReleaseDC;
-decltype(&BeginPaint) g_orig_BeginPaint = BeginPaint;
-decltype(&EndPaint) g_orig_EndPaint = EndPaint;
-decltype(&CreateCompatibleDC) g_orig_CreateCompatibleDC = CreateCompatibleDC;
-decltype(&DeleteDC) g_orig_DeleteDC = DeleteDC;
-decltype(&CreateDIBSection) g_orig_CreateDIBSection = CreateDIBSection;
-decltype(&DeleteObject) g_orig_DeleteObject = DeleteObject;
-decltype(&BitBlt) g_orig_BitBlt = BitBlt;
-decltype(&StretchBlt) g_orig_StretchBlt = StretchBlt;
-decltype(&SwapBuffers) g_orig_SwapBuffers = SwapBuffers;
-decltype(&ChoosePixelFormat) g_orig_ChoosePixelFormat = ChoosePixelFormat;
-decltype(&SetPixelFormat) g_orig_SetPixelFormat = SetPixelFormat;
-decltype(&wglCreateContext) g_orig_wglCreateContext = wglCreateContext;
-decltype(&wglMakeCurrent) g_orig_wglMakeCurrent = wglMakeCurrent;
-decltype(&wglDeleteContext) g_orig_wglDeleteContext = wglDeleteContext;
+template <typename T>
+T LoadOriginalFunction(const wchar_t *module_name, const char *function_name) {
+  HMODULE module = GetModuleHandleW(module_name);
+  if (module == nullptr) {
+    module = LoadLibraryW(module_name);
+  }
+  if (module == nullptr) {
+    return nullptr;
+  }
+  FARPROC proc = GetProcAddress(module, function_name);
+  return reinterpret_cast<T>(proc);
+}
+
+// Fetch the real entry points directly from their host DLLs before any hooks are
+// installed. Using GetProcAddress() avoids reading already-patched thunks from
+// the import table, which would otherwise recurse back into our hook.
+decltype(&CreateWindowExW) g_orig_CreateWindowExW =
+    LoadOriginalFunction<decltype(&CreateWindowExW)>(L"user32.dll",
+                                                    "CreateWindowExW");
+decltype(&CreateWindowExA) g_orig_CreateWindowExA =
+    LoadOriginalFunction<decltype(&CreateWindowExA)>(L"user32.dll",
+                                                    "CreateWindowExA");
+decltype(&DestroyWindow) g_orig_DestroyWindow =
+    LoadOriginalFunction<decltype(&DestroyWindow)>(L"user32.dll",
+                                                   "DestroyWindow");
+decltype(&GetDC) g_orig_GetDC =
+    LoadOriginalFunction<decltype(&GetDC)>(L"user32.dll", "GetDC");
+decltype(&GetDCEx) g_orig_GetDCEx =
+    LoadOriginalFunction<decltype(&GetDCEx)>(L"user32.dll", "GetDCEx");
+decltype(&GetWindowDC) g_orig_GetWindowDC =
+    LoadOriginalFunction<decltype(&GetWindowDC)>(L"user32.dll", "GetWindowDC");
+decltype(&ReleaseDC) g_orig_ReleaseDC =
+    LoadOriginalFunction<decltype(&ReleaseDC)>(L"user32.dll", "ReleaseDC");
+decltype(&BeginPaint) g_orig_BeginPaint =
+    LoadOriginalFunction<decltype(&BeginPaint)>(L"user32.dll", "BeginPaint");
+decltype(&EndPaint) g_orig_EndPaint =
+    LoadOriginalFunction<decltype(&EndPaint)>(L"user32.dll", "EndPaint");
+decltype(&CreateCompatibleDC) g_orig_CreateCompatibleDC =
+    LoadOriginalFunction<decltype(&CreateCompatibleDC)>(L"gdi32.dll",
+                                                        "CreateCompatibleDC");
+decltype(&DeleteDC) g_orig_DeleteDC =
+    LoadOriginalFunction<decltype(&DeleteDC)>(L"gdi32.dll", "DeleteDC");
+decltype(&CreateDIBSection) g_orig_CreateDIBSection =
+    LoadOriginalFunction<decltype(&CreateDIBSection)>(L"gdi32.dll",
+                                                      "CreateDIBSection");
+decltype(&DeleteObject) g_orig_DeleteObject =
+    LoadOriginalFunction<decltype(&DeleteObject)>(L"gdi32.dll", "DeleteObject");
+decltype(&BitBlt) g_orig_BitBlt =
+    LoadOriginalFunction<decltype(&BitBlt)>(L"gdi32.dll", "BitBlt");
+decltype(&StretchBlt) g_orig_StretchBlt =
+    LoadOriginalFunction<decltype(&StretchBlt)>(L"gdi32.dll", "StretchBlt");
+decltype(&SwapBuffers) g_orig_SwapBuffers =
+    LoadOriginalFunction<decltype(&SwapBuffers)>(L"gdi32.dll", "SwapBuffers");
+decltype(&ChoosePixelFormat) g_orig_ChoosePixelFormat =
+    LoadOriginalFunction<decltype(&ChoosePixelFormat)>(L"gdi32.dll",
+                                                       "ChoosePixelFormat");
+decltype(&SetPixelFormat) g_orig_SetPixelFormat =
+    LoadOriginalFunction<decltype(&SetPixelFormat)>(L"gdi32.dll", "SetPixelFormat");
+decltype(&wglCreateContext) g_orig_wglCreateContext =
+    LoadOriginalFunction<decltype(&wglCreateContext)>(L"opengl32.dll",
+                                                      "wglCreateContext");
+decltype(&wglMakeCurrent) g_orig_wglMakeCurrent =
+    LoadOriginalFunction<decltype(&wglMakeCurrent)>(L"opengl32.dll",
+                                                    "wglMakeCurrent");
+decltype(&wglDeleteContext) g_orig_wglDeleteContext =
+    LoadOriginalFunction<decltype(&wglDeleteContext)>(L"opengl32.dll",
+                                                      "wglDeleteContext");
 decltype(&CreateCompatibleBitmap) g_orig_CreateCompatibleBitmap =
-    CreateCompatibleBitmap;
-decltype(&SelectObject) g_orig_SelectObject = SelectObject;
-decltype(&PatBlt) g_orig_PatBlt = PatBlt;
-decltype(&DescribePixelFormat) g_orig_DescribePixelFormat = DescribePixelFormat;
+    LoadOriginalFunction<decltype(&CreateCompatibleBitmap)>(
+        L"gdi32.dll", "CreateCompatibleBitmap");
+decltype(&SelectObject) g_orig_SelectObject =
+    LoadOriginalFunction<decltype(&SelectObject)>(L"gdi32.dll", "SelectObject");
+decltype(&PatBlt) g_orig_PatBlt =
+    LoadOriginalFunction<decltype(&PatBlt)>(L"gdi32.dll", "PatBlt");
+decltype(&DescribePixelFormat) g_orig_DescribePixelFormat =
+    LoadOriginalFunction<decltype(&DescribePixelFormat)>(
+        L"gdi32.dll", "DescribePixelFormat");
 
 template <typename... Args>
 void Logf(const wchar_t *format, Args... args) {
