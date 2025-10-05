@@ -37,8 +37,14 @@ std::mutex g_handle_mutex;
 std::unordered_map<UINT_PTR, HandleInfo> g_handle_info;
 std::unordered_map<HDC, HBITMAP> g_selected_bitmaps;
 
+struct WindowState {
+  bool fallback_active = false;
+  bool requires_real_dc = false;
+  bool logged_requires_real_dc = false;
+};
+
 std::mutex g_target_mutex;
-std::unordered_set<HWND> g_target_windows;
+std::unordered_map<HWND, WindowState> g_target_windows;
 
 struct OffscreenSurface {
   HDC dc = nullptr;
@@ -47,6 +53,7 @@ struct OffscreenSurface {
   void *bits = nullptr;
   int width = 0;
   int height = 0;
+  HWND target_window = nullptr;
 };
 
 std::mutex g_surface_mutex;
@@ -216,12 +223,95 @@ std::wstring DescribeHandle(UINT_PTR value) {
   return result;
 }
 
+WindowState *GetWindowStateLocked(HWND hwnd) {
+  auto it = g_target_windows.find(hwnd);
+  if (it == g_target_windows.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
 bool IsTargetWindow(HWND hwnd) {
   if (hwnd == nullptr) {
     return false;
   }
   std::lock_guard<std::mutex> lock(g_target_mutex);
   return g_target_windows.find(hwnd) != g_target_windows.end();
+}
+
+bool ShouldUseOffscreenSurfaceForWindow(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_target_mutex);
+  WindowState *state = GetWindowStateLocked(hwnd);
+  return state != nullptr && state->fallback_active;
+}
+
+void ClearOffscreenTargetWindow(HWND hwnd) {
+  std::lock_guard<std::mutex> lock(g_surface_mutex);
+  if (g_offscreen_surface.target_window == hwnd) {
+    g_offscreen_surface.target_window = nullptr;
+  }
+}
+
+HWND ResolveWindowFromDc(HDC dc) {
+  if (dc == nullptr) {
+    return nullptr;
+  }
+  HWND hwnd = WindowFromDC(dc);
+  if (hwnd != nullptr) {
+    return hwnd;
+  }
+  std::lock_guard<std::mutex> lock(g_surface_mutex);
+  if (HasOffscreenSurfaceUnlocked() && dc == g_offscreen_surface.dc) {
+    return g_offscreen_surface.target_window;
+  }
+  return nullptr;
+}
+
+void MarkWindowRequiresRealDc(HWND hwnd, const wchar_t *reason) {
+  if (hwnd == nullptr) {
+    return;
+  }
+  bool log_requirement = false;
+  bool log_deactivated = false;
+  std::wstring reason_text;
+  {
+    std::lock_guard<std::mutex> lock(g_target_mutex);
+    WindowState *state = GetWindowStateLocked(hwnd);
+    if (state == nullptr) {
+      return;
+    }
+    if (!state->requires_real_dc) {
+      state->requires_real_dc = true;
+      state->logged_requires_real_dc = false;
+    }
+    if (!state->logged_requires_real_dc) {
+      state->logged_requires_real_dc = true;
+      log_requirement = true;
+      if (reason != nullptr) {
+        reason_text.assign(reason);
+      }
+    }
+    if (state->fallback_active) {
+      state->fallback_active = false;
+      log_deactivated = true;
+    }
+  }
+  if (log_deactivated) {
+    ClearOffscreenTargetWindow(hwnd);
+  }
+  if (log_requirement) {
+    const std::wstring message =
+        L"Window " + FormatHwnd(hwnd) + L" requires real window DC" +
+        (reason_text.empty() ? L"" : L" (" + reason_text + L")");
+    DebugTraceLog(message);
+  }
+  if (log_deactivated) {
+    DebugTraceLog(L"Diagnostics fallback disabled for %s (real window DC required)",
+                  FormatHwnd(hwnd).c_str());
+  }
 }
 
 bool HasOffscreenSurfaceUnlocked() {
@@ -410,11 +500,14 @@ BOOL WINAPI Hooked_DestroyWindow(HWND hwnd) {
 }
 
 HDC WINAPI Hooked_GetDC(HWND hwnd) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (ShouldUseOffscreenSurfaceForWindow(hwnd)) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
-    DebugTraceLog(L"GetDC(%s) -> offscreen %s", FormatHwnd(hwnd).c_str(),
-                  FormatHdc(g_offscreen_surface.dc).c_str());
-    return g_offscreen_surface.dc;
+    if (HasOffscreenSurfaceUnlocked()) {
+      g_offscreen_surface.target_window = hwnd;
+      DebugTraceLog(L"GetDC(%s) -> offscreen %s", FormatHwnd(hwnd).c_str(),
+                    FormatHdc(g_offscreen_surface.dc).c_str());
+      return g_offscreen_surface.dc;
+    }
   }
   HDC dc = g_orig_GetDC(hwnd);
   if (dc != nullptr) {
@@ -428,14 +521,17 @@ HDC WINAPI Hooked_GetDC(HWND hwnd) {
 }
 
 HDC WINAPI Hooked_GetDCEx(HWND hwnd, HRGN hrgnClip, DWORD flags) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (ShouldUseOffscreenSurfaceForWindow(hwnd)) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
-    DebugTraceLog(
-        L"GetDCEx(%s, hrgn=%s, flags=0x%08X) -> offscreen %s",
-        FormatHwnd(hwnd).c_str(),
-        FormatPointer(reinterpret_cast<UINT_PTR>(hrgnClip)).c_str(), flags,
-        FormatHdc(g_offscreen_surface.dc).c_str());
-    return g_offscreen_surface.dc;
+    if (HasOffscreenSurfaceUnlocked()) {
+      g_offscreen_surface.target_window = hwnd;
+      DebugTraceLog(
+          L"GetDCEx(%s, hrgn=%s, flags=0x%08X) -> offscreen %s",
+          FormatHwnd(hwnd).c_str(),
+          FormatPointer(reinterpret_cast<UINT_PTR>(hrgnClip)).c_str(), flags,
+          FormatHdc(g_offscreen_surface.dc).c_str());
+      return g_offscreen_surface.dc;
+    }
   }
   HDC dc = g_orig_GetDCEx(hwnd, hrgnClip, flags);
   if (dc != nullptr) {
@@ -451,11 +547,15 @@ HDC WINAPI Hooked_GetDCEx(HWND hwnd, HRGN hrgnClip, DWORD flags) {
 }
 
 HDC WINAPI Hooked_GetWindowDC(HWND hwnd) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (ShouldUseOffscreenSurfaceForWindow(hwnd)) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
-    DebugTraceLog(L"GetWindowDC(%s) -> offscreen %s", FormatHwnd(hwnd).c_str(),
-                  FormatHdc(g_offscreen_surface.dc).c_str());
-    return g_offscreen_surface.dc;
+    if (HasOffscreenSurfaceUnlocked()) {
+      g_offscreen_surface.target_window = hwnd;
+      DebugTraceLog(L"GetWindowDC(%s) -> offscreen %s",
+                    FormatHwnd(hwnd).c_str(),
+                    FormatHdc(g_offscreen_surface.dc).c_str());
+      return g_offscreen_surface.dc;
+    }
   }
   HDC dc = g_orig_GetWindowDC(hwnd);
   if (dc != nullptr) {
@@ -469,7 +569,7 @@ HDC WINAPI Hooked_GetWindowDC(HWND hwnd) {
 }
 
 int WINAPI Hooked_ReleaseDC(HWND hwnd, HDC dc) {
-  if (IsTargetWindow(hwnd)) {
+  if (ShouldUseOffscreenSurfaceForWindow(hwnd)) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     if (dc == g_offscreen_surface.dc && HasOffscreenSurfaceUnlocked()) {
       DebugTraceLog(L"ReleaseDC(%s, offscreen %s) [ignored]",
@@ -485,20 +585,23 @@ int WINAPI Hooked_ReleaseDC(HWND hwnd, HDC dc) {
 }
 
 HDC WINAPI Hooked_BeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (ShouldUseOffscreenSurfaceForWindow(hwnd)) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
-    if (ps != nullptr) {
-      ps->hdc = g_offscreen_surface.dc;
-      ps->fErase = FALSE;
-      ps->rcPaint.left = 0;
-      ps->rcPaint.top = 0;
-      ps->rcPaint.right = g_offscreen_surface.width;
-      ps->rcPaint.bottom = g_offscreen_surface.height;
+    if (HasOffscreenSurfaceUnlocked()) {
+      if (ps != nullptr) {
+        ps->hdc = g_offscreen_surface.dc;
+        ps->fErase = FALSE;
+        ps->rcPaint.left = 0;
+        ps->rcPaint.top = 0;
+        ps->rcPaint.right = g_offscreen_surface.width;
+        ps->rcPaint.bottom = g_offscreen_surface.height;
+      }
+      g_offscreen_surface.target_window = hwnd;
+      DebugTraceLog(L"BeginPaint(%s) -> offscreen %s",
+                    FormatHwnd(hwnd).c_str(),
+                    FormatHdc(g_offscreen_surface.dc).c_str());
+      return g_offscreen_surface.dc;
     }
-    DebugTraceLog(L"BeginPaint(%s) -> offscreen %s",
-                  FormatHwnd(hwnd).c_str(),
-                  FormatHdc(g_offscreen_surface.dc).c_str());
-    return g_offscreen_surface.dc;
   }
   HDC dc = g_orig_BeginPaint(hwnd, ps);
   if (dc != nullptr) {
@@ -512,7 +615,7 @@ HDC WINAPI Hooked_BeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
 }
 
 BOOL WINAPI Hooked_EndPaint(HWND hwnd, const PAINTSTRUCT *ps) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (ShouldUseOffscreenSurfaceForWindow(hwnd) && HasOffscreenSurface()) {
     DebugTraceLog(L"EndPaint(%s) [offscreen]", FormatHwnd(hwnd).c_str());
     return TRUE;
   }
@@ -667,11 +770,13 @@ BOOL WINAPI Hooked_PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop
 
 BOOL WINAPI Hooked_SwapBuffers(HDC dc) {
   DebugTraceLog(L"SwapBuffers(%s)", DescribeHandle(reinterpret_cast<UINT_PTR>(dc)).c_str());
+  MarkWindowRequiresRealDc(ResolveWindowFromDc(dc), L"SwapBuffers");
   return g_orig_SwapBuffers(dc);
 }
 
 int WINAPI Hooked_ChoosePixelFormat(HDC dc, const PIXELFORMATDESCRIPTOR *pfd) {
   DebugTraceLog(L"ChoosePixelFormat(%s)", DescribeHandle(reinterpret_cast<UINT_PTR>(dc)).c_str());
+  MarkWindowRequiresRealDc(ResolveWindowFromDc(dc), L"ChoosePixelFormat");
   return g_orig_ChoosePixelFormat(dc, pfd);
 }
 
@@ -679,6 +784,7 @@ BOOL WINAPI Hooked_SetPixelFormat(HDC dc, int format,
                                   const PIXELFORMATDESCRIPTOR *pfd) {
   DebugTraceLog(L"SetPixelFormat(%s, %d)",
                 DescribeHandle(reinterpret_cast<UINT_PTR>(dc)).c_str(), format);
+  MarkWindowRequiresRealDc(ResolveWindowFromDc(dc), L"SetPixelFormat");
   return g_orig_SetPixelFormat(dc, format, pfd);
 }
 
@@ -687,6 +793,7 @@ int WINAPI Hooked_DescribePixelFormat(HDC dc, int format, UINT bytes,
   DebugTraceLog(L"DescribePixelFormat(dc=%s, format=%d, bytes=%u)",
                 DescribeHandle(reinterpret_cast<UINT_PTR>(dc)).c_str(), format,
                 bytes);
+  MarkWindowRequiresRealDc(ResolveWindowFromDc(dc), L"DescribePixelFormat");
   const int result = g_orig_DescribePixelFormat(dc, format, bytes, pfd);
   DebugTraceLog(L"DescribePixelFormat -> %d", result);
   return result;
@@ -695,6 +802,7 @@ int WINAPI Hooked_DescribePixelFormat(HDC dc, int format, UINT bytes,
 HGLRC WINAPI Hooked_wglCreateContext(HDC dc) {
   DebugTraceLog(L"wglCreateContext(%s)",
                 DescribeHandle(reinterpret_cast<UINT_PTR>(dc)).c_str());
+  MarkWindowRequiresRealDc(ResolveWindowFromDc(dc), L"wglCreateContext");
   HGLRC ctx = g_orig_wglCreateContext(dc);
   TrackHandle(reinterpret_cast<UINT_PTR>(ctx), L"HGLRC",
               DescribeHandle(reinterpret_cast<UINT_PTR>(dc)));
@@ -707,6 +815,7 @@ BOOL WINAPI Hooked_wglMakeCurrent(HDC dc, HGLRC ctx) {
   DebugTraceLog(L"wglMakeCurrent(dc=%s, ctx=%s)",
                 DescribeHandle(reinterpret_cast<UINT_PTR>(dc)).c_str(),
                 DescribeHandle(reinterpret_cast<UINT_PTR>(ctx)).c_str());
+  MarkWindowRequiresRealDc(ResolveWindowFromDc(dc), L"wglMakeCurrent");
   return g_orig_wglMakeCurrent(dc, ctx);
 }
 
@@ -877,6 +986,7 @@ void DestroyOffscreenSurfaceUnlocked() {
   g_offscreen_surface.bits = nullptr;
   g_offscreen_surface.width = 0;
   g_offscreen_surface.height = 0;
+  g_offscreen_surface.target_window = nullptr;
 }
 
 void DestroyDiagnosticsBufferUnlocked() {
@@ -1081,7 +1191,9 @@ void DebugTraceRegisterTargetWindow(HWND hwnd) {
   }
   {
     std::lock_guard<std::mutex> lock(g_target_mutex);
-    g_target_windows.insert(hwnd);
+    if (g_target_windows.find(hwnd) == g_target_windows.end()) {
+      g_target_windows.emplace(hwnd, WindowState{});
+    }
   }
   DebugTraceLog(L"Registered target window %s", FormatHwnd(hwnd).c_str());
 }
@@ -1090,11 +1202,81 @@ void DebugTraceUnregisterTargetWindow(HWND hwnd) {
   if (hwnd == nullptr) {
     return;
   }
+  DebugTraceDeactivateDiagnosticsFallback(hwnd);
   {
     std::lock_guard<std::mutex> lock(g_target_mutex);
     g_target_windows.erase(hwnd);
   }
   DebugTraceLog(L"Unregistered target window %s", FormatHwnd(hwnd).c_str());
+}
+
+bool DebugTraceActivateDiagnosticsFallback(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return false;
+  }
+  bool activated = false;
+  bool skipped_due_to_real_dc = false;
+  {
+    std::lock_guard<std::mutex> lock(g_target_mutex);
+    WindowState *state = GetWindowStateLocked(hwnd);
+    if (state == nullptr) {
+      return false;
+    }
+    if (state->requires_real_dc) {
+      skipped_due_to_real_dc = true;
+    } else if (!state->fallback_active) {
+      state->fallback_active = true;
+      activated = true;
+    } else {
+      return true;
+    }
+  }
+  if (activated) {
+    DebugTraceLog(L"Diagnostics fallback activated for %s", FormatHwnd(hwnd).c_str());
+    return true;
+  }
+  if (skipped_due_to_real_dc) {
+    DebugTraceLog(L"Diagnostics fallback not activated for %s (real window DC required)",
+                  FormatHwnd(hwnd).c_str());
+  }
+  return false;
+}
+
+void DebugTraceDeactivateDiagnosticsFallback(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return;
+  }
+  bool was_active = false;
+  {
+    std::lock_guard<std::mutex> lock(g_target_mutex);
+    WindowState *state = GetWindowStateLocked(hwnd);
+    if (state != nullptr && state->fallback_active) {
+      state->fallback_active = false;
+      was_active = true;
+    }
+  }
+  if (was_active) {
+    ClearOffscreenTargetWindow(hwnd);
+    DebugTraceLog(L"Diagnostics fallback deactivated for %s", FormatHwnd(hwnd).c_str());
+  }
+}
+
+bool DebugTraceIsDiagnosticsFallbackActive(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_target_mutex);
+  WindowState *state = GetWindowStateLocked(hwnd);
+  return state != nullptr && state->fallback_active;
+}
+
+bool DebugTraceWindowRequiresRealDc(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_target_mutex);
+  WindowState *state = GetWindowStateLocked(hwnd);
+  return state != nullptr && state->requires_real_dc;
 }
 
 bool DebugTraceConfigureOffscreenSurface(int width, int height) {
