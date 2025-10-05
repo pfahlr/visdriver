@@ -75,6 +75,11 @@ sudo apt-get install --yes --no-install-recommends \
     wine wine64 wine32:i386 winbind xvfb
 ```
 
+Ubuntu 24.04 only ships the `wine` meta package in the default repositories.
+If you follow older instructions that reference `wine-stable`, add the
+WineHQ repository first or switch the package name back to `wine` before
+running `apt-get install` to avoid resolution failures.
+
 If `wine --version` or `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
 returns `Exec format error`, the host kernel cannot run 32-bit ELF binaries.
 Wine cannot create a 32-bit prefix in that configuration; use a machine with
