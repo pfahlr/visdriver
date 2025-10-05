@@ -16,6 +16,11 @@
 
   The package list mirrors `.ci/ubuntu-packages.txt`.
 
+  Ubuntu 24.04 only ships the `wine` meta package in the default
+  repositories. If older docs mention `wine-stable`, add the WineHQ PPA
+  before installing or substitute the `wine` package name to keep the
+  dependency list working out-of-the-box.
+
 * If `wine --version` or `/usr/lib/i386-linux-gnu/glib-2.0/glib-compile-schemas`
   reports `Exec format error`, the host kernel is missing
   `CONFIG_IA32_EMULATION` and cannot execute 32-bit binaries. Use a kernel or
