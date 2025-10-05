@@ -52,6 +52,9 @@ struct OffscreenSurface {
 std::mutex g_surface_mutex;
 OffscreenSurface g_offscreen_surface;
 
+std::mutex g_begin_paint_mutex;
+std::unordered_map<HWND, PAINTSTRUCT> g_begin_paint_states;
+
 struct DiagnosticsBuffer {
   HDC dc = nullptr;
   HBITMAP bitmap = nullptr;
@@ -485,20 +488,39 @@ int WINAPI Hooked_ReleaseDC(HWND hwnd, HDC dc) {
 }
 
 HDC WINAPI Hooked_BeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
-    std::lock_guard<std::mutex> lock(g_surface_mutex);
-    if (ps != nullptr) {
-      ps->hdc = g_offscreen_surface.dc;
-      ps->fErase = FALSE;
-      ps->rcPaint.left = 0;
-      ps->rcPaint.top = 0;
-      ps->rcPaint.right = g_offscreen_surface.width;
-      ps->rcPaint.bottom = g_offscreen_surface.height;
+  if (IsTargetWindow(hwnd)) {
+    HDC offscreen_dc = nullptr;
+    int offscreen_width = 0;
+    int offscreen_height = 0;
+    {
+      std::lock_guard<std::mutex> lock(g_surface_mutex);
+      if (HasOffscreenSurfaceUnlocked()) {
+        offscreen_dc = g_offscreen_surface.dc;
+        offscreen_width = g_offscreen_surface.width;
+        offscreen_height = g_offscreen_surface.height;
+      }
     }
-    DebugTraceLog(L"BeginPaint(%s) -> offscreen %s",
-                  FormatHwnd(hwnd).c_str(),
-                  FormatHdc(g_offscreen_surface.dc).c_str());
-    return g_offscreen_surface.dc;
+    if (offscreen_dc != nullptr) {
+      PAINTSTRUCT local_ps{};
+      LPPAINTSTRUCT call_ps = ps != nullptr ? ps : &local_ps;
+      HDC real_dc = g_orig_BeginPaint(hwnd, call_ps);
+      {
+        std::lock_guard<std::mutex> paint_lock(g_begin_paint_mutex);
+        g_begin_paint_states[hwnd] = *call_ps;
+      }
+      if (ps != nullptr) {
+        ps->hdc = offscreen_dc;
+        ps->fErase = FALSE;
+        ps->rcPaint.left = 0;
+        ps->rcPaint.top = 0;
+        ps->rcPaint.right = offscreen_width;
+        ps->rcPaint.bottom = offscreen_height;
+      }
+      DebugTraceLog(L"BeginPaint(%s) -> offscreen %s (real %s)",
+                    FormatHwnd(hwnd).c_str(), FormatHdc(offscreen_dc).c_str(),
+                    FormatHdc(real_dc).c_str());
+      return offscreen_dc;
+    }
   }
   HDC dc = g_orig_BeginPaint(hwnd, ps);
   if (dc != nullptr) {
@@ -512,8 +534,26 @@ HDC WINAPI Hooked_BeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
 }
 
 BOOL WINAPI Hooked_EndPaint(HWND hwnd, const PAINTSTRUCT *ps) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
-    DebugTraceLog(L"EndPaint(%s) [offscreen]", FormatHwnd(hwnd).c_str());
+  if (IsTargetWindow(hwnd)) {
+    PAINTSTRUCT original_ps{};
+    bool have_original = false;
+    {
+      std::lock_guard<std::mutex> paint_lock(g_begin_paint_mutex);
+      auto it = g_begin_paint_states.find(hwnd);
+      if (it != g_begin_paint_states.end()) {
+        original_ps = it->second;
+        g_begin_paint_states.erase(it);
+        have_original = true;
+      }
+    }
+    if (have_original) {
+      DebugTraceLog(L"EndPaint(%s) [offscreen -> forwarded]",
+                    FormatHwnd(hwnd).c_str());
+      return g_orig_EndPaint(hwnd, &original_ps);
+    }
+    ValidateRect(hwnd, nullptr);
+    DebugTraceLog(L"EndPaint(%s) [offscreen -> validated]",
+                  FormatHwnd(hwnd).c_str());
     return TRUE;
   }
   DebugTraceLog(L"EndPaint(%s)", FormatHwnd(hwnd).c_str());
