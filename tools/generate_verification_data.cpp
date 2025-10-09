@@ -58,6 +58,8 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+bool g_force_diagnostics_fallback = false;
+
 int g_target_width = 0;
 int g_target_height = 0;
 
@@ -169,6 +171,7 @@ void StopTrackingEmbeddedVisWindow() {
   }
   DebugTraceLog(L"StopTrackingEmbeddedVisWindow: releasing window=%p",
                 g_embedded_vis_window);
+  DebugTraceDeactivateFallbackForWindow(g_embedded_vis_window);
   DebugTraceUnregisterTargetWindow(g_embedded_vis_window);
   g_embedded_vis_window = nullptr;
 }
@@ -186,11 +189,15 @@ void SetTrackedEmbeddedVisWindow(HWND window) {
     DebugTraceLog(L"SetTrackedEmbeddedVisWindow: replacing %p with %p",
                   g_embedded_vis_window, window);
     DebugTraceUnregisterTargetWindow(g_embedded_vis_window);
+    DebugTraceDeactivateFallbackForWindow(g_embedded_vis_window);
   } else {
     DebugTraceLog(L"SetTrackedEmbeddedVisWindow: tracking %p", window);
   }
   g_embedded_vis_window = window;
   DebugTraceRegisterTargetWindow(g_embedded_vis_window);
+  if (g_force_diagnostics_fallback && g_embedded_vis_window != nullptr) {
+    DebugTraceActivateFallbackForWindow(g_embedded_vis_window);
+  }
   ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
 }
 
@@ -199,6 +206,79 @@ HWND GetEmbeddedWindowContainer() {
     return g_child_container_window;
   }
   return g_parent_window;
+}
+
+HWND ResolveCaptureWindow(const VisHost &host) {
+  HWND capture_window = g_embedded_vis_window;
+  if (capture_window != nullptr && IsWindow(capture_window) == FALSE) {
+    DebugTraceLog(L"ResolveCaptureWindow: embedded window %p invalid", capture_window);
+    StopTrackingEmbeddedVisWindow();
+    capture_window = nullptr;
+  }
+  if (capture_window == nullptr) {
+    if (host.child != nullptr && IsWindow(host.child)) {
+      capture_window = host.child;
+    } else if (host.child != nullptr) {
+      DebugTraceLog(L"ResolveCaptureWindow: child window %p invalid", host.child);
+    }
+  }
+  if (capture_window == nullptr) {
+    if (host.parent != nullptr && IsWindow(host.parent)) {
+      capture_window = host.parent;
+    } else if (host.parent != nullptr) {
+      DebugTraceLog(L"ResolveCaptureWindow: parent window %p invalid", host.parent);
+    }
+  }
+  return capture_window;
+}
+
+bool ForceSynchronousPaint(HWND window, int frame_index) {
+  if (window == nullptr) {
+    return false;
+  }
+  const UINT redraw_flags = RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN;
+  if (RedrawWindow(window, nullptr, nullptr, redraw_flags) == FALSE) {
+    const DWORD error = GetLastError();
+    DebugTraceLog(L"Frame %d: RedrawWindow(%p) failed error=%lu", frame_index,
+                  window, static_cast<unsigned long>(error));
+    return false;
+  }
+  DebugTraceLog(L"Frame %d: RedrawWindow(%p) succeeded", frame_index, window);
+  return true;
+}
+
+bool CaptureFrameViaForcedOffscreen(const VisHost &host, int frame_index,
+                                    std::vector<uint8_t> &frame_rgba) {
+  if (!g_force_diagnostics_fallback) {
+    return false;
+  }
+
+  HWND capture_window = ResolveCaptureWindow(host);
+  if (capture_window == nullptr) {
+    DebugTraceLog(L"Frame %d: no window available for forced offscreen capture",
+                  frame_index);
+    return false;
+  }
+
+  DebugTraceActivateFallbackForWindow(capture_window);
+  if (host.child != nullptr) {
+    DebugTraceActivateFallbackForWindow(host.child);
+  }
+  if (host.parent != nullptr) {
+    DebugTraceActivateFallbackForWindow(host.parent);
+  }
+
+  if (!ForceSynchronousPaint(capture_window, frame_index)) {
+    return false;
+  }
+
+  if (DebugTraceCaptureOffscreenSurface(frame_rgba)) {
+    DebugTraceLog(L"Frame %d: captured via forced offscreen surface", frame_index);
+    return true;
+  }
+
+  DebugTraceLog(L"Frame %d: forced offscreen capture unavailable", frame_index);
+  return false;
 }
 
 bool PumpPendingWindowMessages() {
@@ -1487,15 +1567,28 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     unload_vis(host);
     return 1;
   }
-  if (!DebugTraceConfigureOffscreenSurface(options.width, options.height)) {
+  const bool offscreen_surface_ready =
+      DebugTraceConfigureOffscreenSurface(options.width, options.height);
+  if (!offscreen_surface_ready) {
     DebugTraceLog(L"WARNING: Offscreen surface setup failed");
   }
+  bool diagnostics_buffer_ready = false;
   if (options.diagnostics_fallback_enabled) {
-    if (!DebugTraceConfigureDiagnosticsBuffer(options.width, options.height)) {
+    diagnostics_buffer_ready =
+        DebugTraceConfigureDiagnosticsBuffer(options.width, options.height);
+    if (!diagnostics_buffer_ready) {
       DebugTraceLog(L"WARNING: Diagnostics buffer setup failed");
     }
   } else {
     DebugTraceLog(L"Diagnostics fallback disabled by option");
+  }
+  g_force_diagnostics_fallback =
+      offscreen_surface_ready && options.diagnostics_fallback_enabled;
+  if (g_force_diagnostics_fallback) {
+    DebugTraceActivateFallbackForWindow(host.child);
+    if (parent_window != nullptr) {
+      DebugTraceActivateFallbackForWindow(parent_window);
+    }
   }
 
   host.mod->delayMs = (options.fps > 0) ? (1000 / options.fps) : 0;
@@ -1711,14 +1804,20 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
 
     bool captured = false;
-    bool used_diagnostics_buffer = false;
-    if (options.diagnostics_fallback_enabled) {
+    bool used_trace_capture = false;
+    if (g_force_diagnostics_fallback) {
+      captured = CaptureFrameViaForcedOffscreen(host, frame, frame_rgba);
+      used_trace_capture = captured;
+    }
+    if (!captured && options.diagnostics_fallback_enabled) {
       const uint64_t previous_generation = diagnostics_generation;
-      if (DebugTraceFetchLastFrame(diagnostics_generation, frame_rgba)) {
+      uint64_t next_generation = diagnostics_generation;
+      if (DebugTraceFetchLastFrame(next_generation, frame_rgba)) {
+        diagnostics_generation = next_generation;
         DebugTraceLog(L"Frame %d: captured from diagnostics buffer (generation=%llu)",
                       frame, static_cast<unsigned long long>(diagnostics_generation));
         captured = true;
-        used_diagnostics_buffer = true;
+        used_trace_capture = true;
       } else {
         const uint64_t peek_generation = DebugTracePeekDiagnosticsGeneration();
         if (peek_generation == 0) {
@@ -1741,6 +1840,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
         if (captured) {
           DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
+          used_trace_capture = true;
         } else {
           DebugTraceLog(L"Frame %d: offscreen capture unavailable", frame);
         }
@@ -1803,10 +1903,10 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       DebugTraceLog(L"Frame %d: captured from window DC", frame);
     }
 
-    if (!used_diagnostics_buffer && options.diagnostics_fallback_enabled) {
-      const bool has_content = FrameHasVisiblePixels(frame_rgba);
+    if (options.diagnostics_fallback_enabled) {
+      const bool has_content = captured && FrameHasVisiblePixels(frame_rgba);
       const uint64_t peek_generation = DebugTracePeekDiagnosticsGeneration();
-      if ((!captured || !has_content) && peek_generation != 0 &&
+      if ((!captured || !has_content || !used_trace_capture) && peek_generation != 0 &&
           peek_generation != diagnostics_generation) {
         std::vector<uint8_t> diagnostics_rgba;
         uint64_t next_generation = diagnostics_generation;
@@ -1815,11 +1915,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
             frame_rgba.swap(diagnostics_rgba);
             captured = true;
             DebugTraceLog(
-                L"Frame %d: diagnostics buffer used after window capture (generation=%llu)",
+                L"Frame %d: diagnostics buffer used after fallback capture (generation=%llu)",
                 frame, static_cast<unsigned long long>(next_generation));
           }
           diagnostics_generation = next_generation;
-          used_diagnostics_buffer = true;
+          used_trace_capture = true;
         }
       }
     }
@@ -1896,6 +1996,7 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   unload_vis(host);
 
   DebugTraceResetOffscreenSurface();
+  g_force_diagnostics_fallback = false;
 
   if (!capture_failed && !hash_failed && !avi_failed) {
     const std::array<uint8_t, 32> rolling_digest = rolling_hash.Final();
