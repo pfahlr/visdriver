@@ -65,6 +65,7 @@ bool HasValidEmbeddedVisWindow();
 void StopTrackingEmbeddedVisWindow();
 HWND GetEmbeddedWindowContainer();
 void ResizeEmbeddedWindow(HWND container);
+void ForceSynchronousPaint(HWND window);
 
 std::wstring GetWindowClassName(HWND hwnd) {
   if (hwnd == nullptr) {
@@ -254,6 +255,18 @@ bool WaitWithMessagePump(DWORD total_wait_ms) {
   }
 
   return true;
+}
+
+void ForceSynchronousPaint(HWND window) {
+  if (window == nullptr) {
+    return;
+  }
+  if (IsWindow(window) == FALSE) {
+    return;
+  }
+  const UINT redraw_flags =
+      RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME;
+  RedrawWindow(window, nullptr, nullptr, redraw_flags);
 }
 
 bool RequestEmbeddedVisWindow(const VisHost &host) {
@@ -1659,16 +1672,6 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       break;
     }
 
-    const DWORD pump_delay =
-        (host.mod != nullptr && host.mod->delayMs > 0)
-            ? static_cast<DWORD>(host.mod->delayMs)
-            : 0;
-    if (pump_delay > 0) {
-      Sleep(pump_delay);
-    } else {
-      Sleep(0);
-    }
-
     const int samples_per_frame =
         static_cast<int>(std::lround(44100.0 / effective_fps));
     const int hop = std::max(1, samples_per_frame / kWaveformSamples);
@@ -1707,6 +1710,18 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     if (render_result != 0) {
       DebugTraceLog(L"Frame %d: Render aborted", frame);
       DebugTraceLog(L"Frame %d: end (render aborted)", frame);
+      break;
+    }
+
+    ForceSynchronousPaint(g_embedded_vis_window);
+    ForceSynchronousPaint(host.child);
+    ForceSynchronousPaint(host.parent);
+
+    if (!PumpPendingWindowMessages()) {
+      std::wcerr << L"ERROR: Message pump aborted after render.\n";
+      DebugTraceLog(L"Frame %d: message pump aborted after render", frame);
+      capture_failed = true;
+      DebugTraceLog(L"Frame %d: end (message pump failure)", frame);
       break;
     }
 
