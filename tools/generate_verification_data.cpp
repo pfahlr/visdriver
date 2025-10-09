@@ -214,6 +214,48 @@ bool PumpPendingWindowMessages() {
   return true;
 }
 
+bool WaitWithMessagePump(DWORD total_wait_ms) {
+  if (!PumpPendingWindowMessages()) {
+    return false;
+  }
+  if (total_wait_ms == 0) {
+    return true;
+  }
+
+  const ULONGLONG wait_limit = GetTickCount64() + total_wait_ms;
+  while (true) {
+    if (!PumpPendingWindowMessages()) {
+      return false;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    if (now >= wait_limit) {
+      break;
+    }
+
+    const ULONGLONG remaining64 = wait_limit - now;
+    const DWORD remaining =
+        static_cast<DWORD>(std::min<ULONGLONG>(remaining64, 50));
+    if (remaining == 0) {
+      Sleep(0);
+      continue;
+    }
+
+    const DWORD wait_result = MsgWaitForMultipleObjectsEx(
+        0, nullptr, remaining, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    if (wait_result == WAIT_FAILED) {
+      const DWORD wait_error = GetLastError();
+      if (wait_error != ERROR_INVALID_PARAMETER) {
+        DebugTraceLog(L"WaitWithMessagePump: MsgWait failed error=%lu",
+                      wait_error);
+      }
+      Sleep(remaining);
+    }
+  }
+
+  return true;
+}
+
 bool RequestEmbeddedVisWindow(const VisHost &host) {
   HWND command_target = nullptr;
   if (host.child != nullptr) {
@@ -840,6 +882,7 @@ struct Options {
   int height = 480;
   int fps = 60;
   int frames = 121;
+  int wait_time_seconds = 5;
   std::wstring out_dir;
   std::wstring avi_out;
   int png_step = 1;
@@ -854,7 +897,7 @@ void PrintUsage(const std::wstring &command_name) {
     const wchar_t *description;
   };
 
-  const std::array<OptionHelp, 17> kOptions = {
+  const std::array<OptionHelp, 18> kOptions = {
       OptionHelp{L"--vis-dll <path>", L"Path to vis DLL (required)"},
       OptionHelp{L"--runtime-dir <dir>",
                  L"Runtime directory (default: directory of vis DLL)"},
@@ -867,6 +910,8 @@ void PrintUsage(const std::wstring &command_name) {
       OptionHelp{L"--fps <value>", L"Frames per second (default: 60)"},
       OptionHelp{L"--frames <count>",
                  L"Number of frames to render (default: 121)"},
+      OptionHelp{L"--wait-time <seconds>",
+                 L"Delay before playback/capture (default: 5)"},
       OptionHelp{L"--out-dir <dir>", L"Output directory (required)"},
       OptionHelp{L"--avi-out <filename>", L"Optional AVI output filename"},
       OptionHelp{L"--png-step <value>",
@@ -943,6 +988,7 @@ void PrintSummary(const Options &options) {
              << L"\n";
   std::wcout << L"  Frame rate:            " << options.fps << L" fps\n";
   std::wcout << L"  Frame count:           " << options.frames << L"\n";
+  std::wcout << L"  Wait time (s):         " << options.wait_time_seconds << L"\n";
   std::wcout << L"  Output directory:      " << options.out_dir << L"\n";
   std::wcout << L"  AVI output filename:   "
              << (options.avi_out.empty() ? L"(not set)" : options.avi_out) << L"\n";
@@ -1014,6 +1060,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         if (!ParseIntegerOption(current, value, &options.frames)) {
           return 1;
         }
+      } else if (current == L"--wait-time") {
+        const std::wstring value = require_value(current);
+        if (!ParseIntegerOption(current, value, &options.wait_time_seconds)) {
+          return 1;
+        }
       } else if (current == L"--out-dir") {
         options.out_dir = require_value(current);
       } else if (current == L"--avi-out") {
@@ -1068,6 +1119,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
   if (options.png_step <= 0) {
     std::wcerr << L"ERROR: --png-step must be greater than zero.\n";
+    return 1;
+  }
+
+  if (options.wait_time_seconds < 0) {
+    std::wcerr << L"ERROR: --wait-time must be zero or greater.\n";
     return 1;
   }
 
@@ -1535,6 +1591,27 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     std::wcout << L"Loaded preset: " << options.preset << L"\n";
     DebugTraceLog(L"Preset load delivered via WM_DROPFILES");
+  }
+
+  const int wait_seconds = options.wait_time_seconds;
+  if (wait_seconds > 0) {
+    const uint64_t wait_ms_64 = static_cast<uint64_t>(wait_seconds) * 1000ull;
+    const DWORD wait_ms =
+        wait_ms_64 > std::numeric_limits<DWORD>::max()
+            ? std::numeric_limits<DWORD>::max()
+            : static_cast<DWORD>(wait_ms_64);
+    std::wcout << L"Waiting " << wait_seconds
+               << (wait_seconds == 1 ? L" second" : L" seconds")
+               << L" before starting playback and capture.\n";
+    DebugTraceLog(L"Initialization wait: %d seconds (%lu ms)", wait_seconds,
+                  static_cast<unsigned long>(wait_ms));
+    if (!WaitWithMessagePump(wait_ms)) {
+      std::wcerr << L"ERROR: Message loop aborted during wait period.\n";
+      end_vis(host);
+      unload_vis(host);
+      return 1;
+    }
+    DebugTraceLog(L"Initialization wait completed");
   }
 
   if (host.mod->Render == nullptr) {
