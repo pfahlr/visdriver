@@ -61,6 +61,8 @@ HWND g_embedded_vis_window = nullptr;
 int g_target_width = 0;
 int g_target_height = 0;
 
+bool g_force_diagnostics_fallback = false;
+
 bool HasValidEmbeddedVisWindow();
 void StopTrackingEmbeddedVisWindow();
 HWND GetEmbeddedWindowContainer();
@@ -169,6 +171,7 @@ void StopTrackingEmbeddedVisWindow() {
   }
   DebugTraceLog(L"StopTrackingEmbeddedVisWindow: releasing window=%p",
                 g_embedded_vis_window);
+  DebugTraceDeactivateFallbackForWindow(g_embedded_vis_window);
   DebugTraceUnregisterTargetWindow(g_embedded_vis_window);
   g_embedded_vis_window = nullptr;
 }
@@ -191,6 +194,9 @@ void SetTrackedEmbeddedVisWindow(HWND window) {
   }
   g_embedded_vis_window = window;
   DebugTraceRegisterTargetWindow(g_embedded_vis_window);
+  if (g_force_diagnostics_fallback) {
+    DebugTraceActivateFallbackForWindow(g_embedded_vis_window);
+  }
   ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
 }
 
@@ -254,6 +260,64 @@ bool WaitWithMessagePump(DWORD total_wait_ms) {
   }
 
   return true;
+}
+
+enum class DiagnosticsWaitStatus {
+  kCaptured,
+  kTimeout,
+  kMessagePumpFailed,
+};
+
+DiagnosticsWaitStatus WaitForDiagnosticsFrame(
+    uint64_t &diagnostics_generation, std::vector<uint8_t> &frame_rgba,
+    DWORD timeout_ms) {
+  const bool has_timeout = timeout_ms != 0;
+  const ULONGLONG deadline =
+      has_timeout ? GetTickCount64() + static_cast<ULONGLONG>(timeout_ms) : 0;
+
+  while (true) {
+    uint64_t generation = diagnostics_generation;
+    if (DebugTraceFetchLastFrame(generation, frame_rgba)) {
+      diagnostics_generation = generation;
+      return DiagnosticsWaitStatus::kCaptured;
+    }
+
+    if (!PumpPendingWindowMessages()) {
+      return DiagnosticsWaitStatus::kMessagePumpFailed;
+    }
+
+    ULONGLONG wait_limit = 0;
+    if (has_timeout) {
+      const ULONGLONG now = GetTickCount64();
+      if (now >= deadline) {
+        break;
+      }
+      wait_limit = deadline - now;
+    } else {
+      wait_limit = 50;
+    }
+
+    const DWORD wait_ms = static_cast<DWORD>(
+        std::min<ULONGLONG>(wait_limit == 0 ? 1 : wait_limit, 50));
+    const DWORD wait_result = MsgWaitForMultipleObjectsEx(
+        0, nullptr, wait_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    if (wait_result == WAIT_FAILED) {
+      const DWORD wait_error = GetLastError();
+      if (wait_error == ERROR_INVALID_PARAMETER) {
+        if (wait_ms > 0) {
+          Sleep(wait_ms);
+        } else {
+          Sleep(1);
+        }
+        continue;
+      }
+      DebugTraceLog(L"WaitForDiagnosticsFrame: MsgWait failed error=%lu",
+                    wait_error);
+      break;
+    }
+  }
+
+  return DiagnosticsWaitStatus::kTimeout;
 }
 
 bool RequestEmbeddedVisWindow(const VisHost &host) {
@@ -889,6 +953,7 @@ struct Options {
   HashMode hash_mode = HashMode::kPixels;
   std::wstring trace_log = L"avs_debug_trace.log";
   bool diagnostics_fallback_enabled = true;
+  int diagnostics_wait_ms = 1000;
 };
 
 void PrintUsage(const std::wstring &command_name) {
@@ -897,7 +962,7 @@ void PrintUsage(const std::wstring &command_name) {
     const wchar_t *description;
   };
 
-  const std::array<OptionHelp, 18> kOptions = {
+  const std::array<OptionHelp, 19> kOptions = {
       OptionHelp{L"--vis-dll <path>", L"Path to vis DLL (required)"},
       OptionHelp{L"--runtime-dir <dir>",
                  L"Runtime directory (default: directory of vis DLL)"},
@@ -920,6 +985,8 @@ void PrintUsage(const std::wstring &command_name) {
                  L"Hashing mode: pixels|rolling (default: pixels)"},
       OptionHelp{L"--trace-log <filename>",
                  L"Diagnostics log filename (default: avs_debug_trace.log)"},
+      OptionHelp{L"--diagnostics-wait-ms <ms>",
+                 L"Maximum wait for diagnostics frame (default: 1000)"},
       OptionHelp{L"--disable-diagnostics-fallback",
                  L"Disable diagnostics buffer capture fallback"},
       OptionHelp{L"--help, -h", L"Show this help message"},
@@ -997,6 +1064,7 @@ void PrintSummary(const Options &options) {
              << (options.hash_mode == HashMode::kPixels ? L"pixels" : L"rolling")
              << L"\n";
   std::wcout << L"  Trace log filename:    " << options.trace_log << L"\n";
+  std::wcout << L"  Diagnostics wait (ms): " << options.diagnostics_wait_ms << L"\n";
   std::wcout << L"  Diagnostics fallback:  "
              << (options.diagnostics_fallback_enabled ? L"enabled"
                                                       : L"disabled")
@@ -1086,6 +1154,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         }
       } else if (current == L"--trace-log") {
         options.trace_log = require_value(current);
+      } else if (current == L"--diagnostics-wait-ms") {
+        const std::wstring value = require_value(current);
+        if (!ParseIntegerOption(current, value, &options.diagnostics_wait_ms)) {
+          return 1;
+        }
       } else if (current == L"--disable-diagnostics-fallback") {
         options.diagnostics_fallback_enabled = false;
       } else {
@@ -1124,6 +1197,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
   if (options.wait_time_seconds < 0) {
     std::wcerr << L"ERROR: --wait-time must be zero or greater.\n";
+    return 1;
+  }
+
+  if (options.diagnostics_wait_ms < 0) {
+    std::wcerr << L"ERROR: --diagnostics-wait-ms must be zero or greater.\n";
     return 1;
   }
 
@@ -1187,6 +1265,11 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   }
 
   PrintSummary(options);
+
+  g_force_diagnostics_fallback = options.diagnostics_fallback_enabled;
+  struct FallbackFlagGuard {
+    ~FallbackFlagGuard() { g_force_diagnostics_fallback = false; }
+  } fallback_flag_guard;
 
   auto log_runtime_directory = [](const std::wstring &runtime_dir) {
     if (runtime_dir.empty()) {
@@ -1494,6 +1577,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     if (!DebugTraceConfigureDiagnosticsBuffer(options.width, options.height)) {
       DebugTraceLog(L"WARNING: Diagnostics buffer setup failed");
     }
+    if (g_force_diagnostics_fallback) {
+      DebugTraceActivateFallbackForWindow(host.child);
+    }
   } else {
     DebugTraceLog(L"Diagnostics fallback disabled by option");
   }
@@ -1710,16 +1796,34 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       break;
     }
 
+    frame_rgba.clear();
     bool captured = false;
     bool used_diagnostics_buffer = false;
     if (options.diagnostics_fallback_enabled) {
       const uint64_t previous_generation = diagnostics_generation;
-      if (DebugTraceFetchLastFrame(diagnostics_generation, frame_rgba)) {
+      const DWORD wait_timeout =
+          static_cast<DWORD>(options.diagnostics_wait_ms);
+      const DiagnosticsWaitStatus wait_status =
+          WaitForDiagnosticsFrame(diagnostics_generation, frame_rgba,
+                                  wait_timeout);
+      if (wait_status == DiagnosticsWaitStatus::kCaptured) {
         DebugTraceLog(L"Frame %d: captured from diagnostics buffer (generation=%llu)",
                       frame, static_cast<unsigned long long>(diagnostics_generation));
         captured = true;
         used_diagnostics_buffer = true;
+      } else if (wait_status == DiagnosticsWaitStatus::kMessagePumpFailed) {
+        DebugTraceLog(
+            L"Frame %d: diagnostics wait aborted due to message pump failure", frame);
+        capture_failed = true;
+        DebugTraceLog(L"Frame %d: end (message pump failure)", frame);
+        break;
       } else {
+        if (options.diagnostics_wait_ms > 0) {
+          DebugTraceLog(L"Frame %d: diagnostics wait timed out after %u ms", frame,
+                        options.diagnostics_wait_ms);
+        } else {
+          DebugTraceLog(L"Frame %d: diagnostics wait ended without capture", frame);
+        }
         const uint64_t peek_generation = DebugTracePeekDiagnosticsGeneration();
         if (peek_generation == 0) {
           DebugTraceLog(L"Frame %d: diagnostics buffer empty", frame);
@@ -1889,6 +1993,12 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       DebugTraceLog(L"Failed to flush per-frame hash file (error=%lu)", error);
       hash_failed = true;
     }
+  }
+
+  StopTrackingEmbeddedVisWindow();
+  if (options.diagnostics_fallback_enabled) {
+    DebugTraceDeactivateFallbackForWindow(host.child);
+    DebugTraceDeactivateFallbackForWindow(host.parent);
   }
 
   end_vis(host);
