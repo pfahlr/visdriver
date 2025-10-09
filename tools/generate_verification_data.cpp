@@ -1494,17 +1494,39 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
       }
     }
     if (!captured) {
-      captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
-      if (captured) {
-        DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
+      const bool fallback_active =
+          DebugTraceIsFallbackActiveForWindow(host.child) ||
+          DebugTraceIsFallbackActiveForWindow(host.parent);
+      if (fallback_active) {
+        captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
+        if (captured) {
+          DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
+        } else {
+          DebugTraceLog(L"Frame %d: offscreen capture unavailable", frame);
+        }
       } else {
-        DebugTraceLog(L"Frame %d: offscreen capture unavailable", frame);
+        DebugTraceLog(L"Frame %d: offscreen capture skipped (fallback inactive)",
+                      frame);
       }
     }
     if (!captured) {
       DebugTraceLog(L"Frame %d: attempting window capture fallback", frame);
       if (!capture_child_to_rgba(host.child, options.width, options.height,
                                  frame_rgba)) {
+        if (options.diagnostics_fallback_enabled &&
+            !DebugTraceIsFallbackActiveForWindow(host.child)) {
+          DebugTraceLog(
+              L"Frame %d: enabling diagnostics fallback after window capture"
+              L" failure",
+              frame);
+          DebugTraceActivateFallbackForWindow(host.child);
+          DebugTraceResetDiagnosticsBuffer();
+          diagnostics_generation = 0;
+          DebugTraceLog(
+              L"Frame %d: retrying with diagnostics fallback enabled", frame);
+          --frame;
+          continue;
+        }
         std::wcerr << L"ERROR: Failed to capture frame " << frame << L".\n";
         DebugTraceLog(L"Frame %d: window capture failed", frame);
         capture_failed = true;

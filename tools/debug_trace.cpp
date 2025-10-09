@@ -40,6 +40,9 @@ std::unordered_map<HDC, HBITMAP> g_selected_bitmaps;
 std::mutex g_target_mutex;
 std::unordered_set<HWND> g_target_windows;
 
+std::mutex g_fallback_mutex;
+std::unordered_set<HWND> g_fallback_windows;
+
 struct OffscreenSurface {
   HDC dc = nullptr;
   HBITMAP bitmap = nullptr;
@@ -225,6 +228,19 @@ bool IsTargetWindow(HWND hwnd) {
   }
   std::lock_guard<std::mutex> lock(g_target_mutex);
   return g_target_windows.find(hwnd) != g_target_windows.end();
+}
+
+bool IsFallbackWindow(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_fallback_mutex);
+  return g_fallback_windows.find(hwnd) != g_fallback_windows.end();
+}
+
+bool IsAnyFallbackActive() {
+  std::lock_guard<std::mutex> lock(g_fallback_mutex);
+  return !g_fallback_windows.empty();
 }
 
 bool HasOffscreenSurfaceUnlocked() {
@@ -413,7 +429,7 @@ BOOL WINAPI Hooked_DestroyWindow(HWND hwnd) {
 }
 
 HDC WINAPI Hooked_GetDC(HWND hwnd) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (IsFallbackWindow(hwnd) && HasOffscreenSurface()) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     DebugTraceLog(L"GetDC(%s) -> offscreen %s", FormatHwnd(hwnd).c_str(),
                   FormatHdc(g_offscreen_surface.dc).c_str());
@@ -431,7 +447,7 @@ HDC WINAPI Hooked_GetDC(HWND hwnd) {
 }
 
 HDC WINAPI Hooked_GetDCEx(HWND hwnd, HRGN hrgnClip, DWORD flags) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (IsFallbackWindow(hwnd) && HasOffscreenSurface()) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     DebugTraceLog(
         L"GetDCEx(%s, hrgn=%s, flags=0x%08X) -> offscreen %s",
@@ -454,7 +470,7 @@ HDC WINAPI Hooked_GetDCEx(HWND hwnd, HRGN hrgnClip, DWORD flags) {
 }
 
 HDC WINAPI Hooked_GetWindowDC(HWND hwnd) {
-  if (IsTargetWindow(hwnd) && HasOffscreenSurface()) {
+  if (IsFallbackWindow(hwnd) && HasOffscreenSurface()) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     DebugTraceLog(L"GetWindowDC(%s) -> offscreen %s", FormatHwnd(hwnd).c_str(),
                   FormatHdc(g_offscreen_surface.dc).c_str());
@@ -472,7 +488,7 @@ HDC WINAPI Hooked_GetWindowDC(HWND hwnd) {
 }
 
 int WINAPI Hooked_ReleaseDC(HWND hwnd, HDC dc) {
-  if (IsTargetWindow(hwnd)) {
+  if (IsFallbackWindow(hwnd)) {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
     if (dc == g_offscreen_surface.dc && HasOffscreenSurfaceUnlocked()) {
       DebugTraceLog(L"ReleaseDC(%s, offscreen %s) [ignored]",
@@ -488,7 +504,7 @@ int WINAPI Hooked_ReleaseDC(HWND hwnd, HDC dc) {
 }
 
 HDC WINAPI Hooked_BeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
-  if (IsTargetWindow(hwnd)) {
+  if (IsFallbackWindow(hwnd)) {
     HDC offscreen_dc = nullptr;
     int offscreen_width = 0;
     int offscreen_height = 0;
@@ -534,7 +550,7 @@ HDC WINAPI Hooked_BeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
 }
 
 BOOL WINAPI Hooked_EndPaint(HWND hwnd, const PAINTSTRUCT *ps) {
-  if (IsTargetWindow(hwnd)) {
+  if (IsFallbackWindow(hwnd)) {
     PAINTSTRUCT original_ps{};
     bool have_original = false;
     {
@@ -1134,6 +1150,7 @@ void DebugTraceUnregisterTargetWindow(HWND hwnd) {
     std::lock_guard<std::mutex> lock(g_target_mutex);
     g_target_windows.erase(hwnd);
   }
+  DebugTraceDeactivateFallbackForWindow(hwnd);
   DebugTraceLog(L"Unregistered target window %s", FormatHwnd(hwnd).c_str());
 }
 
@@ -1191,6 +1208,9 @@ void DebugTraceResetOffscreenSurface() {
 }
 
 bool DebugTraceCaptureOffscreenSurface(std::vector<uint8_t> &out_rgba) {
+  if (!IsAnyFallbackActive()) {
+    return false;
+  }
   std::lock_guard<std::mutex> lock(g_surface_mutex);
   if (!HasOffscreenSurfaceUnlocked()) {
     return false;
@@ -1291,4 +1311,39 @@ bool DebugTraceFetchLastFrame(uint64_t &in_out_generation,
 uint64_t DebugTracePeekDiagnosticsGeneration() {
   std::lock_guard<std::mutex> lock(g_diagnostics_mutex);
   return g_diagnostics_buffer.generation;
+}
+
+void DebugTraceActivateFallbackForWindow(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return;
+  }
+  bool activated = false;
+  {
+    std::lock_guard<std::mutex> lock(g_fallback_mutex);
+    auto result = g_fallback_windows.insert(hwnd);
+    activated = result.second;
+  }
+  if (activated) {
+    DebugTraceLog(L"Activated diagnostics fallback for window %s",
+                  FormatHwnd(hwnd).c_str());
+  }
+}
+
+void DebugTraceDeactivateFallbackForWindow(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return;
+  }
+  bool deactivated = false;
+  {
+    std::lock_guard<std::mutex> lock(g_fallback_mutex);
+    deactivated = g_fallback_windows.erase(hwnd) > 0;
+  }
+  if (deactivated) {
+    DebugTraceLog(L"Deactivated diagnostics fallback for window %s",
+                  FormatHwnd(hwnd).c_str());
+  }
+}
+
+bool DebugTraceIsFallbackActiveForWindow(HWND hwnd) {
+  return IsFallbackWindow(hwnd);
 }
