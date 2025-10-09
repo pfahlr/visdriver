@@ -249,6 +249,17 @@ WINEPREFIX="$HOME/.wine32" wine visdriver.exe generate-verification-data \
   --width 1000 --height 600
 ```
 
+
+### For Testing 
+
+for testing during development, I've created the following 2 scripts 
+
+`/devtest_build.sh` - will build the visdriver.exe binary and move the sample files into place
+
+`/devtest_run.sh` - will run visdriver.exe on wine with a set of options representative of notmal use
+
+
+
 ### CLI Output
 The console output has been enhanced to provide useful information about the state of the program's operation:
 
