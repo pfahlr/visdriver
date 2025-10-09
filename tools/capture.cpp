@@ -165,7 +165,7 @@ bool capture_child_to_rgba(HWND child, int width, int height,
     dst[offset + 0] = src[offset + 2]; // R
     dst[offset + 1] = src[offset + 1]; // G
     dst[offset + 2] = src[offset + 0]; // B
-    dst[offset + 3] = src[offset + 3]; // A
+    dst[offset + 3] = 255;             // force opaque alpha
   }
 
   SelectObject(memory_dc.get(), old_bitmap);

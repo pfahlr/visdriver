@@ -58,6 +58,106 @@ HWND g_parent_window = nullptr;
 HWND g_child_container_window = nullptr;
 HWND g_embedded_vis_window = nullptr;
 
+int g_target_width = 0;
+int g_target_height = 0;
+
+bool HasValidEmbeddedVisWindow();
+void StopTrackingEmbeddedVisWindow();
+HWND GetEmbeddedWindowContainer();
+void ResizeEmbeddedWindow(HWND container);
+
+std::wstring GetWindowClassName(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return L"(null)";
+  }
+  wchar_t buffer[256];
+  const int length = GetClassNameW(
+      hwnd, buffer, static_cast<int>(sizeof(buffer) / sizeof(buffer[0])));
+  if (length <= 0) {
+    return L"(unknown)";
+  }
+  return std::wstring(buffer, buffer + length);
+}
+
+bool ShouldReplaceTrackedWindow(HWND candidate) {
+  if (candidate == nullptr) {
+    return false;
+  }
+  if (HasValidEmbeddedVisWindow() && candidate == g_embedded_vis_window) {
+    return false;
+  }
+  if (HasValidEmbeddedVisWindow() &&
+      IsChild(g_embedded_vis_window, candidate)) {
+    return true;
+  }
+  if (IsWindow(candidate) == FALSE) {
+    return false;
+  }
+
+  const LONG_PTR candidate_style = GetWindowLongPtrW(candidate, GWL_STYLE);
+  if ((candidate_style & WS_CHILD) == 0) {
+    return false;
+  }
+
+  RECT candidate_rect{0, 0, 0, 0};
+  GetClientRect(candidate, &candidate_rect);
+  const int candidate_width = candidate_rect.right - candidate_rect.left;
+  const int candidate_height = candidate_rect.bottom - candidate_rect.top;
+  const int candidate_area = candidate_width * candidate_height;
+
+  if (!HasValidEmbeddedVisWindow()) {
+    return candidate_area >= 0;
+  }
+
+  RECT current_rect{0, 0, 0, 0};
+  GetClientRect(g_embedded_vis_window, &current_rect);
+  const int current_width = current_rect.right - current_rect.left;
+  const int current_height = current_rect.bottom - current_rect.top;
+  const int current_area = current_width * current_height;
+
+  const LONG_PTR current_style =
+      GetWindowLongPtrW(g_embedded_vis_window, GWL_STYLE);
+  const bool current_visible = (current_style & WS_VISIBLE) != 0;
+  const bool candidate_visible = (candidate_style & WS_VISIBLE) != 0;
+
+  const LONG_PTR candidate_class_style =
+      GetClassLongPtrW(candidate, GCL_STYLE);
+  const LONG_PTR current_class_style =
+      GetClassLongPtrW(g_embedded_vis_window, GCL_STYLE);
+  const bool candidate_has_own_dc = (candidate_class_style & CS_OWNDC) != 0;
+  const bool current_has_own_dc = (current_class_style & CS_OWNDC) != 0;
+
+  if (candidate_has_own_dc && !current_has_own_dc) {
+    return true;
+  }
+  if (candidate_visible && !current_visible) {
+    return true;
+  }
+  if (candidate_area > current_area) {
+    return true;
+  }
+  if (current_area <= 0 && candidate_area > 0) {
+    return true;
+  }
+  return false;
+}
+
+bool FrameHasVisiblePixels(const std::vector<uint8_t> &buffer) {
+  if (buffer.size() < 4) {
+    return false;
+  }
+  const size_t pixel_count = buffer.size() / 4;
+  const uint8_t *data = buffer.data();
+  for (size_t i = 0; i < pixel_count; ++i) {
+    const size_t offset = i * 4;
+    if (data[offset + 0] != 0 || data[offset + 1] != 0 ||
+        data[offset + 2] != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool HasValidEmbeddedVisWindow() {
   return g_embedded_vis_window != nullptr &&
          IsWindow(g_embedded_vis_window) != FALSE;
@@ -79,6 +179,7 @@ void SetTrackedEmbeddedVisWindow(HWND window) {
     return;
   }
   if (g_embedded_vis_window == window) {
+    ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
     return;
   }
   if (g_embedded_vis_window != nullptr) {
@@ -90,6 +191,7 @@ void SetTrackedEmbeddedVisWindow(HWND window) {
   }
   g_embedded_vis_window = window;
   DebugTraceRegisterTargetWindow(g_embedded_vis_window);
+  ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
 }
 
 HWND GetEmbeddedWindowContainer() {
@@ -397,10 +499,23 @@ void ResizeEmbeddedWindow(HWND container) {
   if (!GetClientRect(container, &rect)) {
     return;
   }
-  const int width = rect.right - rect.left;
-  const int height = rect.bottom - rect.top;
+  int width = rect.right - rect.left;
+  int height = rect.bottom - rect.top;
+  if (width <= 0 && g_target_width > 0) {
+    width = g_target_width;
+  }
+  if (height <= 0 && g_target_height > 0) {
+    height = g_target_height;
+  }
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  DebugTraceLog(L"ResizeEmbeddedWindow: container=%p embed=%p size=%dx%d",
+                container, g_embedded_vis_window, width, height);
   SetWindowPos(g_embedded_vis_window, nullptr, 0, 0, width, height,
                SWP_NOACTIVATE | SWP_NOZORDER);
+  SendMessageW(g_embedded_vis_window, WM_SIZE, SIZE_RESTORED,
+               MAKELPARAM(width, height));
 }
 
 LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -448,20 +563,27 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         if (!IsWindow(child)) {
           break;
         }
-
-        if (HasValidEmbeddedVisWindow()) {
-          if (child != g_embedded_vis_window) {
-            DebugTraceLog(
-                L"WM_PARENTNOTIFY: ignoring child %p because embedded window %p "
-                L"is still valid",
-                child, g_embedded_vis_window);
-          }
-          break;
-        }
-
+        RECT rect{0, 0, 0, 0};
+        GetClientRect(child, &rect);
+        const int child_width = rect.right - rect.left;
+        const int child_height = rect.bottom - rect.top;
+        const LONG_PTR child_style = GetWindowLongPtrW(child, GWL_STYLE);
+        const std::wstring class_name = GetWindowClassName(child);
         DebugTraceLog(
-            L"WM_PARENTNOTIFY: tracking embedded window candidate %p", child);
-        SetTrackedEmbeddedVisWindow(child);
+            L"WM_PARENTNOTIFY: child create hwnd=%p class=%ls size=%dx%d "
+            L"style=0x%016llX",
+            child, class_name.c_str(), child_width, child_height,
+            static_cast<unsigned long long>(child_style));
+
+        if (!HasValidEmbeddedVisWindow() || ShouldReplaceTrackedWindow(child)) {
+          DebugTraceLog(L"WM_PARENTNOTIFY: tracking embedded window candidate %p",
+                        child);
+          SetTrackedEmbeddedVisWindow(child);
+        } else {
+          DebugTraceLog(
+              L"WM_PARENTNOTIFY: keeping existing embedded window %p over %p",
+              g_embedded_vis_window, child);
+        }
         ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
       } else if (event == WM_DESTROY) {
         HWND child = reinterpret_cast<HWND>(lParam);
@@ -469,6 +591,35 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
           DebugTraceLog(L"WM_PARENTNOTIFY: tracked embedded window %p destroyed",
                         child);
           StopTrackingEmbeddedVisWindow();
+        }
+      }
+      break;
+    }
+
+    case WM_WINDOWPOSCHANGING: {
+      auto pos = reinterpret_cast<WINDOWPOS *>(lParam);
+      if (pos != nullptr && (pos->flags & SWP_NOSIZE) == 0 &&
+          (hwnd == g_child_container_window || hwnd == g_parent_window)) {
+        if (g_target_width > 0 && g_target_height > 0) {
+          pos->cx = g_target_width;
+          pos->cy = g_target_height;
+          DebugTraceLog(
+              L"AvsWindowProc: enforcing %dx%d via WINDOWPOSCHANGING on %p",
+              g_target_width, g_target_height, hwnd);
+        }
+      }
+      break;
+    }
+
+    case WM_GETMINMAXINFO: {
+      if (hwnd == g_child_container_window || hwnd == g_parent_window) {
+        auto info = reinterpret_cast<MINMAXINFO *>(lParam);
+        if (info != nullptr && g_target_width > 0 && g_target_height > 0) {
+          info->ptMinTrackSize.x = g_target_width;
+          info->ptMinTrackSize.y = g_target_height;
+          info->ptMaxTrackSize.x = g_target_width;
+          info->ptMaxTrackSize.y = g_target_height;
+          return 0;
         }
       }
       break;
@@ -516,8 +667,15 @@ LRESULT CALLBACK AvsWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
           }
           auto state = reinterpret_cast<embedWindowState *>(wParam);
           HWND embed_target = embed_window(state);
+          if (state != nullptr && g_target_width > 0 && g_target_height > 0) {
+            state->r.left = 0;
+            state->r.top = 0;
+            state->r.right = g_target_width;
+            state->r.bottom = g_target_height;
+          }
           DebugTraceLog(L"AvsWindowProc: IPC_GET_EMBEDIF state=%p -> %p", state,
                         embed_target);
+          ResizeEmbeddedWindow(embed_target);
           return reinterpret_cast<LRESULT>(embed_target);
         }
         case IPC_SETVISWND: {
@@ -1183,6 +1341,9 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
   DebugTraceLog(L"Render options: %dx%d @ %d FPS for %d frames", options.width,
                 options.height, options.fps, options.frames);
 
+  g_target_width = options.width;
+  g_target_height = options.height;
+
   const std::filesystem::path per_frame_csv_path =
       hashes_dir_path / L"per_frame.csv";
   const std::filesystem::path rolling_hash_path =
@@ -1473,12 +1634,14 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
 
     bool captured = false;
+    bool used_diagnostics_buffer = false;
     if (options.diagnostics_fallback_enabled) {
       const uint64_t previous_generation = diagnostics_generation;
       if (DebugTraceFetchLastFrame(diagnostics_generation, frame_rgba)) {
         DebugTraceLog(L"Frame %d: captured from diagnostics buffer (generation=%llu)",
                       frame, static_cast<unsigned long long>(diagnostics_generation));
         captured = true;
+        used_diagnostics_buffer = true;
       } else {
         const uint64_t peek_generation = DebugTracePeekDiagnosticsGeneration();
         if (peek_generation == 0) {
@@ -1511,7 +1674,34 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     }
     if (!captured) {
       DebugTraceLog(L"Frame %d: attempting window capture fallback", frame);
-      if (!capture_child_to_rgba(host.child, options.width, options.height,
+      HWND capture_window = g_embedded_vis_window;
+      if (capture_window != nullptr &&
+          IsWindow(capture_window) == FALSE) {
+        DebugTraceLog(
+            L"Frame %d: embedded window %p is no longer valid, clearing", frame,
+            capture_window);
+        StopTrackingEmbeddedVisWindow();
+        capture_window = nullptr;
+      }
+      if (capture_window == nullptr) {
+        capture_window = host.child;
+      }
+      if (capture_window == nullptr) {
+        capture_window = host.parent;
+      }
+      if (capture_window != nullptr && capture_window == g_embedded_vis_window) {
+        ResizeEmbeddedWindow(GetEmbeddedWindowContainer());
+      }
+      if (capture_window == nullptr) {
+        std::wcerr << L"ERROR: No valid window available for frame capture.\n";
+        DebugTraceLog(L"Frame %d: no capture window available", frame);
+        capture_failed = true;
+        DebugTraceLog(L"Frame %d: end (capture failure)", frame);
+        break;
+      }
+      DebugTraceLog(L"Frame %d: capture target window=%p", frame,
+                    capture_window);
+      if (!capture_child_to_rgba(capture_window, options.width, options.height,
                                  frame_rgba)) {
         if (options.diagnostics_fallback_enabled &&
             !DebugTraceIsFallbackActiveForWindow(host.child)) {
@@ -1534,6 +1724,27 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
         break;
       }
       DebugTraceLog(L"Frame %d: captured from window DC", frame);
+    }
+
+    if (!used_diagnostics_buffer && options.diagnostics_fallback_enabled) {
+      const bool has_content = FrameHasVisiblePixels(frame_rgba);
+      const uint64_t peek_generation = DebugTracePeekDiagnosticsGeneration();
+      if ((!captured || !has_content) && peek_generation != 0 &&
+          peek_generation != diagnostics_generation) {
+        std::vector<uint8_t> diagnostics_rgba;
+        uint64_t next_generation = diagnostics_generation;
+        if (DebugTraceFetchLastFrame(next_generation, diagnostics_rgba)) {
+          if (!diagnostics_rgba.empty()) {
+            frame_rgba.swap(diagnostics_rgba);
+            captured = true;
+            DebugTraceLog(
+                L"Frame %d: diagnostics buffer used after window capture (generation=%llu)",
+                frame, static_cast<unsigned long long>(next_generation));
+          }
+          diagnostics_generation = next_generation;
+          used_diagnostics_buffer = true;
+        }
+      }
     }
 
     if (avi_enabled && !avi_failed) {

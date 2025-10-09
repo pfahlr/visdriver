@@ -1226,7 +1226,7 @@ bool DebugTraceCaptureOffscreenSurface(std::vector<uint8_t> &out_rgba) {
     dst[offset + 0] = src[offset + 2];
     dst[offset + 1] = src[offset + 1];
     dst[offset + 2] = src[offset + 0];
-    dst[offset + 3] = src[offset + 3];
+    dst[offset + 3] = 255;
   }
   return true;
 }
@@ -1302,7 +1302,7 @@ bool DebugTraceFetchLastFrame(uint64_t &in_out_generation,
     dst[offset + 0] = src[offset + 2];
     dst[offset + 1] = src[offset + 1];
     dst[offset + 2] = src[offset + 0];
-    dst[offset + 3] = src[offset + 3];
+    dst[offset + 3] = 255;
   }
   in_out_generation = g_diagnostics_buffer.generation;
   return true;
