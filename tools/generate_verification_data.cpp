@@ -1487,8 +1487,32 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
     unload_vis(host);
     return 1;
   }
-  if (!DebugTraceConfigureOffscreenSurface(options.width, options.height)) {
+  struct FallbackWindowGuard {
+    HWND parent = nullptr;
+    HWND child = nullptr;
+    ~FallbackWindowGuard() {
+      if (child != nullptr) {
+        DebugTraceDeactivateFallbackForWindow(child);
+      }
+      if (parent != nullptr) {
+        DebugTraceDeactivateFallbackForWindow(parent);
+      }
+    }
+  } fallback_guard;
+  bool offscreen_capture_enabled = false;
+  const bool offscreen_surface_ready =
+      DebugTraceConfigureOffscreenSurface(options.width, options.height);
+  if (!offscreen_surface_ready) {
     DebugTraceLog(L"WARNING: Offscreen surface setup failed");
+  } else {
+    DebugTraceActivateFallbackForWindow(host.parent);
+    DebugTraceActivateFallbackForWindow(host.child);
+    fallback_guard.parent = host.parent;
+    fallback_guard.child = host.child;
+    offscreen_capture_enabled = true;
+    std::wcout << L"Capturing frames directly from the offscreen surface.\n";
+    DebugTraceLog(L"Offscreen capture forced for parent=%p child=%p", host.parent,
+                  host.child);
   }
   if (options.diagnostics_fallback_enabled) {
     if (!DebugTraceConfigureDiagnosticsBuffer(options.width, options.height)) {
@@ -1712,7 +1736,17 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
 
     bool captured = false;
     bool used_diagnostics_buffer = false;
-    if (options.diagnostics_fallback_enabled) {
+    if (offscreen_capture_enabled) {
+      captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
+      if (captured) {
+        DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
+      } else {
+        DebugTraceLog(L"Frame %d: offscreen capture unavailable", frame);
+      }
+    } else {
+      DebugTraceLog(L"Frame %d: offscreen capture skipped (not enabled)", frame);
+    }
+    if (!captured && options.diagnostics_fallback_enabled) {
       const uint64_t previous_generation = diagnostics_generation;
       if (DebugTraceFetchLastFrame(diagnostics_generation, frame_rgba)) {
         DebugTraceLog(L"Frame %d: captured from diagnostics buffer (generation=%llu)",
@@ -1731,22 +1765,6 @@ extern "C" int cmd_generate_verification_data(int argc, wchar_t **argv) {
                         frame, static_cast<unsigned long long>(previous_generation),
                         static_cast<unsigned long long>(peek_generation));
         }
-      }
-    }
-    if (!captured) {
-      const bool fallback_active =
-          DebugTraceIsFallbackActiveForWindow(host.child) ||
-          DebugTraceIsFallbackActiveForWindow(host.parent);
-      if (fallback_active) {
-        captured = DebugTraceCaptureOffscreenSurface(frame_rgba);
-        if (captured) {
-          DebugTraceLog(L"Frame %d: captured from offscreen surface", frame);
-        } else {
-          DebugTraceLog(L"Frame %d: offscreen capture unavailable", frame);
-        }
-      } else {
-        DebugTraceLog(L"Frame %d: offscreen capture skipped (fallback inactive)",
-                      frame);
       }
     }
     if (!captured) {
